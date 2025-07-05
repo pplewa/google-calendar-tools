@@ -1155,27 +1155,225 @@ class GoogleCalendarTools implements CalendarExtension {
           eventDate = extractedDate;
           this.log('Using extracted local date:', eventDate.toDateString());
         } else {
-          // Fallback to converting UTC to local date
-          eventDate = eventDetails.startDateTime ? new Date(eventDetails.startDateTime) : new Date();
-          this.log('Fallback to parsed date:', eventDate.toDateString());
+          this.log('Could not extract date from calendar position, using event details date');
+          eventDate = eventDetails.startDateTime || new Date();
         }
       } else {
-        // Final fallback
-        eventDate = eventDetails.startDateTime ? new Date(eventDetails.startDateTime) : new Date();
-        this.log('No event element found, using parsed date:', eventDate.toDateString());
+        this.log('Event element not found, using event details date');
+        eventDate = eventDetails.startDateTime || new Date();
       }
+
+      this.log('Event date (local):', eventDate.toDateString());
       
+      // Calculate tomorrow relative to the event date (not current date)
       const tomorrow = new Date(eventDate);
       tomorrow.setDate(tomorrow.getDate() + 1);
-      
-      this.log('Event date (local):', eventDate.toDateString());
       this.log('Tomorrow (relative to local event date):', tomorrow.toDateString());
+
+      // Try to use Google's native "Copy to Calendar" functionality first
+      const copySuccess = await this.tryNativeCopyToCalendar(eventDetails);
+      if (copySuccess) {
+        return; // Native copy succeeded, we're done
+      }
+
+      // Fallback to our custom creation method
+      this.log('Native copy failed, falling back to custom creation');
+      await this.createEventInBackground(eventDetails, tomorrow);
       
-      // Adjust event times for tomorrow
-      const adjustedEvent = this.adjustEventForNewDate(eventDetails, tomorrow);
+    } catch (error) {
+      this.error('Error creating duplicate event', error as Error);
+      this.health.failedEnhancements++;
+      this.showNotification('Error: Failed to create duplicate event', 'error');
+      throw error;
+    }
+  }
+
+  private async tryNativeCopyToCalendar(eventDetails: EventDetails): Promise<boolean> {
+    try {
+      // Find the current popover
+      const popover = document.querySelector('div[role="dialog"], div[role="region"]');
+      if (!popover) {
+        this.log('No popover found for native copy');
+        return false;
+      }
+
+      // Look for "Copy to [Calendar]" buttons
+      const calendarName = eventDetails.calendarId || 'family'; // Default to family if not found
+      const copyButtons = this.findCopyToCalendarButtons(popover, calendarName);
       
-      // Create event in the background using Google Calendar's quick add
-      await this.createEventInBackground(adjustedEvent);
+      if (copyButtons.length === 0) {
+        this.log(`No "Copy to ${calendarName}" button found in popover`);
+        return false;
+      }
+
+      // Click the appropriate copy button
+      const targetButton = copyButtons[0];
+      this.log(`Found native copy button for ${calendarName}, clicking it`);
+      
+      // Click the button
+      targetButton.click();
+      
+      // Wait for the copy operation to complete
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Check if a new event creation dialog opened
+      const eventDialog = document.querySelector('div[role="dialog"][aria-label*="event"], div[role="dialog"][aria-label*="Event"]');
+      if (eventDialog) {
+        this.log('Event creation dialog opened, adjusting date to tomorrow');
+        
+        // Try to adjust the date in the dialog
+        await this.adjustDateInEventDialog(eventDialog);
+        
+        // Try to save the event
+        await this.saveEventInDialog(eventDialog);
+        
+        // Show success notification
+        const originalCalendar = eventDetails.calendarId || 'unknown';
+        this.showNotification(
+          `Event "${eventDetails.title}" duplicated to tomorrow!\n\n✅ Successfully copied using ${originalCalendar} calendar.`,
+          'success'
+        );
+        
+        return true;
+      } else {
+        this.log('No event creation dialog appeared after clicking copy button');
+        return false;
+      }
+      
+    } catch (error) {
+      this.error('Error in native copy operation', error as Error);
+      return false;
+    }
+  }
+
+  private findCopyToCalendarButtons(popover: Element, targetCalendar: string): HTMLElement[] {
+    const buttons: HTMLElement[] = [];
+    
+    // Look for text that contains "Copy to [Calendar]"
+    const allElements = Array.from(popover.querySelectorAll('*'));
+    
+    for (const element of allElements) {
+      const text = element.textContent || '';
+      
+      // Look for patterns like "Copy to Family", "Copy to Peter", etc.
+      const copyPattern = new RegExp(`Copy to ${targetCalendar}`, 'i');
+      if (copyPattern.test(text)) {
+        // Find the clickable element (button, div with role="button", etc.)
+        let clickableElement = element as HTMLElement;
+        
+        // Check if the element itself is clickable
+        if (element.tagName === 'BUTTON' || 
+            element.getAttribute('role') === 'button' ||
+            element.hasAttribute('onclick') ||
+            (element as HTMLElement).style.cursor === 'pointer') {
+          buttons.push(clickableElement);
+        } else {
+          // Look for a clickable parent
+          let parent = element.parentElement;
+          while (parent && parent !== popover) {
+            if (parent.tagName === 'BUTTON' || 
+                parent.getAttribute('role') === 'button' ||
+                parent.hasAttribute('onclick') ||
+                window.getComputedStyle(parent).cursor === 'pointer') {
+              buttons.push(parent);
+              break;
+            }
+            parent = parent.parentElement;
+          }
+        }
+      }
+    }
+    
+    // Also look for generic copy buttons that might be associated with calendars
+    const genericCopyButtons = Array.from(popover.querySelectorAll('button, [role="button"]'))
+      .filter(btn => {
+        const text = btn.textContent || '';
+        return text.toLowerCase().includes('copy') || 
+               text.toLowerCase().includes('duplicate') ||
+               btn.getAttribute('aria-label')?.toLowerCase().includes('copy');
+      });
+    
+    buttons.push(...(genericCopyButtons as HTMLElement[]));
+    
+    this.log(`Found ${buttons.length} potential copy buttons for ${targetCalendar}`);
+    return buttons;
+  }
+
+  private async adjustDateInEventDialog(dialog: Element): Promise<void> {
+    try {
+      // Look for date input fields
+      const dateInputs = Array.from(dialog.querySelectorAll('input[type="date"], input[aria-label*="date"], input[placeholder*="date"]'));
+      
+      for (const input of dateInputs) {
+        const dateInput = input as HTMLInputElement;
+        if (dateInput.value) {
+          // Parse current date and add one day
+          const currentDate = new Date(dateInput.value);
+          const tomorrow = new Date(currentDate);
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          
+          // Format as YYYY-MM-DD
+          const tomorrowStr = tomorrow.toISOString().split('T')[0];
+          
+          // Update the input
+          dateInput.value = tomorrowStr;
+          dateInput.dispatchEvent(new Event('change', { bubbles: true }));
+          dateInput.dispatchEvent(new Event('input', { bubbles: true }));
+          
+          this.log(`Adjusted date from ${dateInput.value} to ${tomorrowStr}`);
+          break;
+        }
+      }
+    } catch (error) {
+      this.log('Could not adjust date in event dialog', error);
+    }
+  }
+
+  private async saveEventInDialog(dialog: Element): Promise<void> {
+    try {
+      // Look for save button
+      const saveButtons = Array.from(dialog.querySelectorAll('button, [role="button"]'))
+        .filter(btn => {
+          const text = btn.textContent?.toLowerCase() || '';
+          const ariaLabel = btn.getAttribute('aria-label')?.toLowerCase() || '';
+          return text.includes('save') || 
+                 text.includes('create') ||
+                 ariaLabel.includes('save') ||
+                 ariaLabel.includes('create');
+        });
+      
+      if (saveButtons.length > 0) {
+        const saveButton = saveButtons[0] as HTMLElement;
+        saveButton.click();
+        this.log('Clicked save button in event dialog');
+        
+        // Wait for save to complete
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } else {
+        this.log('No save button found in event dialog');
+      }
+    } catch (error) {
+      this.log('Could not save event in dialog', error);
+    }
+  }
+
+  private async createEventInBackground(eventDetails: EventDetails, targetDate?: Date): Promise<void> {
+    this.log('Creating event in background', eventDetails);
+    
+    try {
+      // If we have a target date, adjust the event for that date
+      let adjustedEventDetails = eventDetails;
+      if (targetDate) {
+        adjustedEventDetails = this.adjustEventForNewDate(eventDetails, targetDate);
+      }
+      
+      // Try to use Google Calendar's internal API if available
+      if ((window as any).gapi && (window as any).gapi.client) {
+        await this.createEventWithGAPI(adjustedEventDetails, targetDate);
+      } else {
+        // Fallback: Use direct fetch to Google Calendar API
+        await this.createEventWithFetch(adjustedEventDetails, targetDate);
+      }
       
       // Show success notification with calendar information
       const originalCalendar = eventDetails.calendarId || 'Unknown';
@@ -1198,32 +1396,12 @@ class GoogleCalendarTools implements CalendarExtension {
       this.health.totalEnhanced++;
       
     } catch (error) {
-      this.error('Error creating duplicate event', error as Error);
-      this.health.failedEnhancements++;
-      this.showNotification('Error: Failed to create duplicate event', 'error');
+      this.error('Error creating event in background', error as Error);
       throw error;
     }
   }
 
-  private async createEventInBackground(eventDetails: EventDetails): Promise<void> {
-    this.log('Creating event in background', eventDetails);
-    
-    try {
-      // Try to use Google Calendar's internal API if available
-      if ((window as any).gapi && (window as any).gapi.client) {
-        await this.createEventWithGAPI(eventDetails);
-      } else {
-        // Fallback: Use direct fetch to Google Calendar API
-        await this.createEventWithFetch(eventDetails);
-      }
-      
-    } catch (error) {
-      this.error('Error in background event creation', error as Error);
-      throw error;
-    }
-  }
-
-  private async createEventWithFetch(eventDetails: EventDetails): Promise<void> {
+  private async createEventWithFetch(eventDetails: EventDetails, targetDate?: Date): Promise<void> {
     // Build event object for logging
     const eventObj = {
       summary: eventDetails.title,
@@ -1237,16 +1415,16 @@ class GoogleCalendarTools implements CalendarExtension {
     
     // Create the event using Google Calendar's authenticated API
     try {
-      await this.createEventViaGoogleCalendarAPI(eventDetails);
+      await this.createEventViaGoogleCalendarAPI(eventDetails, targetDate);
       this.log('Event creation API call completed');
     } catch (apiError) {
       this.log('API method failed, trying URL-based creation', apiError);
       // Fallback to URL-based creation
-      await this.createEventViaURL(eventDetails);
+      await this.createEventViaURL(eventDetails, targetDate);
     }
   }
 
-  private async createEventViaGoogleCalendarAPI(eventDetails: EventDetails): Promise<void> {
+  private async createEventViaGoogleCalendarAPI(eventDetails: EventDetails, targetDate?: Date): Promise<void> {
     // Use the extracted calendar ID from the original event, or fall back to primary
     let calendarId = 'primary';
     
@@ -1298,9 +1476,9 @@ class GoogleCalendarTools implements CalendarExtension {
     this.log('Event created successfully:', result);
   }
 
-  private async createEventViaURL(eventDetails: EventDetails): Promise<void> {
+  private async createEventViaURL(eventDetails: EventDetails, targetDate?: Date): Promise<void> {
     // Create event by programmatically filling and submitting Google Calendar's form
-    const eventUrl = this.buildEventCreateUrl(eventDetails);
+    const eventUrl = this.buildEventCreateUrl(eventDetails, targetDate);
     
     // Create a hidden iframe that loads the event creation page
     const iframe = document.createElement('iframe');
@@ -1476,13 +1654,13 @@ class GoogleCalendarTools implements CalendarExtension {
     return null;
   }
 
-  private async createEventWithGAPI(eventDetails: EventDetails): Promise<void> {
+  private async createEventWithGAPI(eventDetails: EventDetails, targetDate?: Date): Promise<void> {
     // This would use Google's API client if available
     this.log('GAPI not fully implemented yet, falling back to fetch method');
-    await this.createEventWithFetch(eventDetails);
+    await this.createEventWithFetch(eventDetails, targetDate);
   }
 
-  private buildEventCreateUrl(eventDetails: EventDetails): string {
+  private buildEventCreateUrl(eventDetails: EventDetails, targetDate?: Date): string {
     // Use the more reliable Google Calendar URL format
     const baseUrl = 'https://calendar.google.com/calendar/render';
     const params = new URLSearchParams();
@@ -1507,7 +1685,7 @@ class GoogleCalendarTools implements CalendarExtension {
       params.append('text', eventDetails.title);
     }
     
-    // Add dates in Google Calendar format
+    // Add dates in Google Calendar format (use the already adjusted times from eventDetails)
     if (eventDetails.startDateTime && eventDetails.endDateTime) {
       const dateStr = this.formatGoogleCalendarDates(
         eventDetails.startDateTime,
@@ -1522,10 +1700,14 @@ class GoogleCalendarTools implements CalendarExtension {
       params.append('location', eventDetails.location);
     }
     
-    // Add description with helpful calendar information
+    // Add description with helpful instructions
     let description = '[Duplicated by Google Calendar Tools]';
+    if (eventDetails.description) {
+      description += `\n\nOriginal description:\n${eventDetails.description}`;
+    }
     
-    if (eventDetails.calendarId && eventDetails.calendarId !== 'primary') {
+    // Include helpful calendar information
+    if (eventDetails.calendarId) {
       description += `\n\n📅 CALENDAR NOTE: This event was originally in your "${eventDetails.calendarId}" calendar.`;
       description += `\n\nTo move this event to the correct calendar:`;
       description += `\n1. After saving, click on this event`;
@@ -1534,14 +1716,11 @@ class GoogleCalendarTools implements CalendarExtension {
       description += `\n4. Click "Save"`;
     }
     
-    if (eventDetails.description) {
-      description = `${eventDetails.description}\n\n${description}`;
-    }
     params.append('details', description);
     
-    const url = `${baseUrl}?${params.toString()}`;
-    this.log('Built event creation URL:', url);
-    return url;
+    const finalUrl = `${baseUrl}?${params.toString()}`;
+    this.log('Built event creation URL:', finalUrl);
+    return finalUrl;
   }
   
   private normalizeCalendarId(calendarId: string): string {
