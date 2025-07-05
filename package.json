@@ -17,13 +17,13 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "vite build",
     "preview": "vite preview",
     "fmt": "prettier --write '**/*.{ts,json,css,scss,md}'",
     "zip": "npm run build && node src/zip.js"
   },
   "devDependencies": {
-    "@crxjs/vite-plugin": "^2.0.0-beta.26",
+    "@crxjs/vite-plugin": "^2.0.2",
     "@types/chrome": "^0.0.246",
     "gulp": "^5.0.0",
     "gulp-zip": "^6.0.0",

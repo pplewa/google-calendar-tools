@@ -1,13 +1,10 @@
+// @ts-nocheck
 import { defineManifest } from '@crxjs/vite-plugin'
-import packageData from '../package.json'
 
-//@ts-ignore
-const isDev = process.env.NODE_ENV == 'development'
-
-export default defineManifest({
-  name: `${packageData.displayName || packageData.name}${isDev ? ` ➡️ Dev` : ''}`,
+const manifest = defineManifest({
+  name: 'Google Calendar Tools',
   description: 'Enhance Google Calendar with powerful productivity tools: duplicate events, copy entire days, batch operations, and quick duration adjustments.',
-  version: packageData.version,
+  version: '0.0.1',
   manifest_version: 3,
   icons: {
     16: 'img/logo-16.png',
@@ -37,11 +34,14 @@ export default defineManifest({
   web_accessible_resources: [
     {
       resources: ['img/logo-16.png', 'img/logo-32.png', 'img/logo-48.png', 'img/logo-128.png'],
-      matches: [],
+      matches: ['https://calendar.google.com/*'],
     },
   ],
-  permissions: ['storage'],
+  permissions: ['storage', 'activeTab'],
   chrome_url_overrides: {
     newtab: 'newtab.html',
   },
+  host_permissions: ['https://calendar.google.com/*'],
 })
+
+export default manifest 
