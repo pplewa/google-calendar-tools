@@ -563,11 +563,15 @@ class GoogleCalendarTools implements CalendarExtension {
 
     this.log('Extracting event details from popover');
 
+    // Get the actual event element from the calendar to extract the correct date
+    const eventCard = this.eventCards.get(eventId);
+    const eventDate = eventCard ? this.extractEventDateFromCalendarPosition(eventCard.element) : null;
+
     // Extract title (usually in a prominent heading)
     const title = this.extractTitle(popover) || 'Untitled Event';
     
     // Extract time information
-    const timeInfo = this.extractTimeInfo(popover);
+    const timeInfo = this.extractTimeInfo(popover, eventDate);
     
     // Extract location (usually has a location icon)
     const location = this.extractLocation(popover);
@@ -614,9 +618,93 @@ class GoogleCalendarTools implements CalendarExtension {
     return largestText?.textContent?.trim() || 'Untitled Event';
   }
 
-  private extractTimeInfo(popover: Element): { startDateTime: Date | null, endDateTime: Date | null, isAllDay: boolean } {
+  private extractEventDateFromCalendarPosition(eventElement: HTMLElement): Date | null {
+    try {
+      // Try to extract date from the calendar grid position
+      // Look for date information in parent elements or nearby elements
+      let currentElement = eventElement;
+      
+      // Look for date information in the element's ancestry
+      while (currentElement && currentElement !== document.body) {
+        // Check for date attributes or patterns
+        const dateAttr = currentElement.getAttribute('data-date') || 
+                        currentElement.getAttribute('data-datekey') ||
+                        currentElement.getAttribute('data-day');
+        
+        if (dateAttr) {
+          const date = new Date(dateAttr);
+          if (!isNaN(date.getTime())) {
+            this.log('Found date from element attribute:', date.toDateString());
+            return date;
+          }
+        }
+        
+        // Look for date patterns in nearby text
+        const nearbyText = currentElement.textContent || '';
+        const datePattern = /\b(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\b/;
+        const dateMatch = nearbyText.match(datePattern);
+        if (dateMatch) {
+          const day = parseInt(dateMatch[1], 10);
+          const month = this.parseMonth(dateMatch[2]);
+          const year = parseInt(dateMatch[3], 10);
+          const date = new Date(year, month, day);
+          if (!isNaN(date.getTime())) {
+            this.log('Found date from nearby text:', date.toDateString());
+            return date;
+          }
+        }
+        
+        currentElement = currentElement.parentElement as HTMLElement;
+      }
+      
+      // Try to find the date from the calendar grid structure
+      // Look for column headers or grid position
+      const rect = eventElement.getBoundingClientRect();
+      const elementsAtPosition = document.elementsFromPoint(rect.left + rect.width / 2, rect.top);
+      
+      for (const element of elementsAtPosition) {
+        const text = element.textContent?.trim();
+        if (text && /^\d{1,2}$/.test(text)) {
+          // Found a day number, try to construct the date
+          const day = parseInt(text, 10);
+          const currentDate = new Date();
+          
+          // Try to find the month/year from the current calendar view
+          const monthYearElement = document.querySelector('h1, h2, [role="heading"]');
+          if (monthYearElement) {
+            const monthYearText = monthYearElement.textContent || '';
+            const monthYearMatch = monthYearText.match(/([A-Za-z]{3,9})\s+(\d{4})/);
+            if (monthYearMatch) {
+              const month = this.parseMonth(monthYearMatch[1]);
+              const year = parseInt(monthYearMatch[2], 10);
+              const date = new Date(year, month, day);
+              if (!isNaN(date.getTime())) {
+                this.log('Constructed date from calendar grid:', date.toDateString());
+                return date;
+              }
+            }
+          }
+          
+          // Fallback: use current month/year with the found day
+          const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+          if (!isNaN(date.getTime())) {
+            this.log('Constructed date with current month/year:', date.toDateString());
+            return date;
+          }
+        }
+      }
+      
+      this.log('Could not extract date from calendar position');
+      return null;
+    } catch (error) {
+      this.error('Error extracting date from calendar position', error as Error);
+      return null;
+    }
+  }
+
+  private extractTimeInfo(popover: Element, eventDate: Date | null = null): { startDateTime: Date | null, endDateTime: Date | null, isAllDay: boolean } {
     const allTextElements = Array.from(popover.querySelectorAll('span, div, p'));
-    const today = new Date();
+    const fallbackDate = eventDate || new Date();
     
     // Combine all text to analyze
     const combinedText = allTextElements
@@ -625,14 +713,15 @@ class GoogleCalendarTools implements CalendarExtension {
       .join(' ');
 
     this.log(`Analyzing time text: "${combinedText}"`);
+    this.log(`Using fallback date: ${fallbackDate.toDateString()}`);
 
     // Pattern 1: All-day events
     const allDayPattern = /All day(?: • ([A-Za-z]{3,9} \d{1,2}(?:, \d{4})?)(?: – ([A-Za-z]{3,9} \d{1,2}(?:, \d{4})?))?)?/i;
     const allDayMatch = combinedText.match(allDayPattern);
     if (allDayMatch) {
       this.log('Detected all-day event');
-      const startDate = allDayMatch[1] ? this.parseDate(allDayMatch[1], today) : today;
-      const endDate = allDayMatch[2] ? this.parseDate(allDayMatch[2], today) : startDate;
+      const startDate = allDayMatch[1] ? this.parseDate(allDayMatch[1], fallbackDate) : fallbackDate;
+      const endDate = allDayMatch[2] ? this.parseDate(allDayMatch[2], fallbackDate) : startDate;
       
       // Set times to start and end of day
       const start = new Date(startDate);
@@ -653,9 +742,9 @@ class GoogleCalendarTools implements CalendarExtension {
     const multiDayMatch = combinedText.match(multiDayPattern);
     if (multiDayMatch) {
       this.log('Detected multi-day timed event');
-      const startDate = this.parseDate(multiDayMatch[1], today);
+      const startDate = this.parseDate(multiDayMatch[1], fallbackDate);
       const startTime = this.parseTime(multiDayMatch[2]);
-      const endDate = this.parseDate(multiDayMatch[3], today);
+      const endDate = this.parseDate(multiDayMatch[3], fallbackDate);
       const endTime = this.parseTime(multiDayMatch[4]);
       
       const start = this.combineDateAndTime(startDate, startTime);
@@ -673,7 +762,7 @@ class GoogleCalendarTools implements CalendarExtension {
     const singleDayWithDateMatch = combinedText.match(singleDayWithDatePattern);
     if (singleDayWithDateMatch) {
       this.log('Detected single-day timed event with date');
-      const eventDate = this.parseDate(singleDayWithDateMatch[1], today);
+      const eventDate = this.parseDate(singleDayWithDateMatch[1], fallbackDate);
       const startTime = this.parseTime(singleDayWithDateMatch[2]);
       const endTime = this.parseTime(singleDayWithDateMatch[3]);
       
@@ -695,8 +784,8 @@ class GoogleCalendarTools implements CalendarExtension {
       const startTime = this.parseTime(timeRangeMatch[1]);
       const endTime = this.parseTime(timeRangeMatch[2]);
       
-      const start = this.combineDateAndTime(today, startTime);
-      const end = this.combineDateAndTime(today, endTime);
+      const start = this.combineDateAndTime(fallbackDate, startTime);
+      const end = this.combineDateAndTime(fallbackDate, endTime);
       
       return {
         startDateTime: start,
@@ -713,8 +802,8 @@ class GoogleCalendarTools implements CalendarExtension {
       const startTime = this.parseTime24(time24Match[1]);
       const endTime = this.parseTime24(time24Match[2]);
       
-      const start = this.combineDateAndTime(today, startTime);
-      const end = this.combineDateAndTime(today, endTime);
+      const start = this.combineDateAndTime(fallbackDate, startTime);
+      const end = this.combineDateAndTime(fallbackDate, endTime);
       
       return {
         startDateTime: start,
@@ -729,7 +818,7 @@ class GoogleCalendarTools implements CalendarExtension {
     if (singleTimeMatch) {
       this.log('Detected single time (no end time)');
       const startTime = this.parseTime(singleTimeMatch[1]);
-      const start = this.combineDateAndTime(today, startTime);
+      const start = this.combineDateAndTime(fallbackDate, startTime);
       
       // Default to 1-hour duration
       const end = new Date(start.getTime() + 60 * 60 * 1000);
@@ -743,10 +832,10 @@ class GoogleCalendarTools implements CalendarExtension {
 
     this.log('No time pattern found, defaulting to all-day');
     // Default to all-day if no time pattern is found
-    const start = new Date(today);
+    const start = new Date(fallbackDate);
     start.setHours(0, 0, 0, 0);
     
-    const end = new Date(today);
+    const end = new Date(fallbackDate);
     end.setHours(23, 59, 59, 999);
     
     return {
