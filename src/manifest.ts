@@ -6,7 +6,7 @@ const isDev = process.env.NODE_ENV == 'development'
 
 export default defineManifest({
   name: `${packageData.displayName || packageData.name}${isDev ? ` ➡️ Dev` : ''}`,
-  description: packageData.description,
+  description: 'Enhance Google Calendar with powerful productivity tools: duplicate events, copy entire days, batch operations, and quick duration adjustments.',
   version: packageData.version,
   manifest_version: 3,
   icons: {
@@ -27,7 +27,7 @@ export default defineManifest({
   },
   content_scripts: [
     {
-      matches: ['http://*/*', 'https://*/*'],
+      matches: ['https://calendar.google.com/*'],
       js: ['src/contentScript/index.ts'],
     },
   ],
@@ -40,7 +40,7 @@ export default defineManifest({
       matches: [],
     },
   ],
-  permissions: ['sidePanel', 'storage'],
+  permissions: ['storage'],
   chrome_url_overrides: {
     newtab: 'newtab.html',
   },
