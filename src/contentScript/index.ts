@@ -1323,15 +1323,12 @@ class GoogleCalendarTools implements CalendarExtension {
   }
 
   private async createDuplicateEvent(eventDetails: EventDetails, targetDate: Date, calendarId: string): Promise<void> {
-    // Adjust the event for the target date
-    const adjustedEvent = this.adjustEventForNewDate(eventDetails, targetDate);
-    
-    // Use Google Calendar's Quick Add functionality with the correct calendar
-    const success = await this.useQuickAdd(adjustedEvent, calendarId);
+    // Use Google Calendar's native "Duplicate" button - this preserves the original calendar
+    const success = await this.useNativeDuplicate(eventDetails, targetDate);
     
     if (success) {
       this.showNotification(
-        `Event "${eventDetails.title}" duplicated to tomorrow!\n\n✅ Successfully created in "${eventDetails.calendarId || 'your'}" calendar.`,
+        `Event "${eventDetails.title}" duplicated to tomorrow!\n\n✅ Successfully created in "${eventDetails.calendarId || 'original'}" calendar.`,
         'success'
       );
       
@@ -1341,7 +1338,7 @@ class GoogleCalendarTools implements CalendarExtension {
       this.health.totalEnhanced++;
     } else {
       // Fallback to URL method with clear instructions
-      await this.createEventViaURL(adjustedEvent);
+      await this.createEventViaURL(eventDetails);
       
       const calendarName = eventDetails.calendarId || 'unknown';
       this.showNotification(
@@ -1354,48 +1351,161 @@ class GoogleCalendarTools implements CalendarExtension {
     }
   }
 
-  private async useQuickAdd(eventDetails: EventDetails, calendarId: string): Promise<boolean> {
+  private async useNativeDuplicate(eventDetails: EventDetails, targetDate: Date): Promise<boolean> {
     try {
-      // Try to use Google Calendar's Quick Add feature
-      const quickAddInput = document.querySelector('input[placeholder*="add"], input[aria-label*="add"], input[placeholder*="event"]') as HTMLInputElement;
+      // Find the current popover
+      const popover = document.querySelector('div[role="dialog"], div[role="region"]');
+      if (!popover) {
+        this.log('No popover found for native duplicate');
+        return false;
+      }
+
+      // Look for the "Duplicate" button
+      const duplicateButton = this.findDuplicateButton(popover);
+      if (!duplicateButton) {
+        this.log('No Duplicate button found in popover');
+        return false;
+      }
+
+      this.log('Found Duplicate button, clicking it');
       
-      if (quickAddInput) {
-        // Format the quick add text
-        const timeStr = eventDetails.isAllDay ? 
-          'all day' : 
-          `${this.formatTimeForQuickAdd(eventDetails.startDateTime!)} to ${this.formatTimeForQuickAdd(eventDetails.endDateTime!)}`;
+      // Click the duplicate button
+      duplicateButton.click();
+      
+      // Wait for the duplicate creation dialog to appear
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Look for the event creation/edit dialog
+      const eventDialog = document.querySelector('div[role="dialog"][aria-label*="event"], div[role="dialog"][aria-label*="Event"], div[role="dialog"]:has(input[type="text"][value*="' + eventDetails.title + '"])');
+      if (eventDialog) {
+        this.log('Event creation dialog opened after duplicate, adjusting date to tomorrow');
         
-        const quickAddText = `${eventDetails.title} ${timeStr} tomorrow`;
+        // Try to adjust the date in the dialog to tomorrow
+        await this.adjustDateInEventDialog(eventDialog, targetDate);
         
-        // Focus and fill the input
-        quickAddInput.focus();
-        quickAddInput.value = quickAddText;
+        // Try to save the event
+        await this.saveEventInDialog(eventDialog);
         
-        // Trigger input events
-        quickAddInput.dispatchEvent(new Event('input', { bubbles: true }));
-        quickAddInput.dispatchEvent(new Event('change', { bubbles: true }));
-        
-        // Press Enter to create
-        quickAddInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-        
-        this.log('Used Quick Add to create event:', quickAddText);
         return true;
+      } else {
+        this.log('No event creation dialog appeared after clicking duplicate button');
+        return false;
       }
       
-      return false;
     } catch (error) {
-      this.log('Quick Add failed:', error);
+      this.error('Error in native duplicate operation', error as Error);
       return false;
     }
   }
 
-  private formatTimeForQuickAdd(date: Date): string {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+  private findDuplicateButton(popover: Element): HTMLElement | null {
+    // Look for text that contains "Duplicate"
+    const allElements = Array.from(popover.querySelectorAll('*'));
+    
+    for (const element of allElements) {
+      const text = (element.textContent || '').toLowerCase().trim();
+      
+      // Look for exact "duplicate" text
+      if (text === 'duplicate') {
+        // Find the clickable element (button, div with role="button", etc.)
+        let clickableElement = element as HTMLElement;
+        
+        // Check if the element itself is clickable
+        if (element.tagName === 'BUTTON' || 
+            element.getAttribute('role') === 'button' ||
+            element.hasAttribute('onclick') ||
+            window.getComputedStyle(element as HTMLElement).cursor === 'pointer') {
+          return clickableElement;
+        } else {
+          // Look for a clickable parent
+          let parent = element.parentElement;
+          while (parent && parent !== popover) {
+            if (parent.tagName === 'BUTTON' || 
+                parent.getAttribute('role') === 'button' ||
+                parent.hasAttribute('onclick') ||
+                window.getComputedStyle(parent).cursor === 'pointer') {
+              return parent;
+            }
+            parent = parent.parentElement;
+          }
+        }
+      }
+    }
+    
+    // Also look for generic buttons that might be the duplicate button
+    const buttons = Array.from(popover.querySelectorAll('button, [role="button"]'));
+    for (const button of buttons) {
+      const text = (button.textContent || '').toLowerCase();
+      const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
+      
+      if (text.includes('duplicate') || ariaLabel.includes('duplicate')) {
+        return button as HTMLElement;
+      }
+    }
+    
+    this.log('Could not find Duplicate button in popover');
+    return null;
   }
 
+  private async adjustDateInEventDialog(dialog: Element, targetDate: Date): Promise<void> {
+    try {
+      // Look for date input fields
+      const dateInputs = Array.from(dialog.querySelectorAll('input[type="date"], input[aria-label*="date"], input[placeholder*="date"], input[aria-label*="Date"]'));
+      
+      for (const input of dateInputs) {
+        const dateInput = input as HTMLInputElement;
+        if (dateInput.value) {
+          // Format target date as YYYY-MM-DD
+          const targetDateStr = targetDate.toISOString().split('T')[0];
+          
+          this.log(`Adjusting date from ${dateInput.value} to ${targetDateStr}`);
+          
+          // Update the input
+          dateInput.value = targetDateStr;
+          dateInput.dispatchEvent(new Event('change', { bubbles: true }));
+          dateInput.dispatchEvent(new Event('input', { bubbles: true }));
+          dateInput.dispatchEvent(new Event('blur', { bubbles: true }));
+          
+          // Wait for the change to be processed
+          await new Promise(resolve => setTimeout(resolve, 500));
+          break;
+        }
+      }
+    } catch (error) {
+      this.log('Could not adjust date in event dialog', error);
+    }
+  }
 
-
-
+  private async saveEventInDialog(dialog: Element): Promise<void> {
+    try {
+      // Look for save/create button
+      const buttons = Array.from(dialog.querySelectorAll('button, [role="button"]'));
+      
+      for (const button of buttons) {
+        const text = (button.textContent || '').toLowerCase();
+        const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
+        
+        if (text.includes('save') || 
+            text.includes('create') ||
+            text.includes('done') ||
+            ariaLabel.includes('save') ||
+            ariaLabel.includes('create') ||
+            ariaLabel.includes('done')) {
+          
+          this.log(`Clicking save button: ${button.textContent?.trim()}`);
+          (button as HTMLElement).click();
+          
+          // Wait for save to complete
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return;
+        }
+      }
+      
+      this.log('No save button found in event dialog');
+    } catch (error) {
+      this.log('Could not save event in dialog', error);
+    }
+  }
 
   private async createEventInBackground(eventDetails: EventDetails, targetDate?: Date): Promise<void> {
     this.log('Creating event in background', eventDetails);
