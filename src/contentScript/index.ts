@@ -996,20 +996,32 @@ class GoogleCalendarTools implements CalendarExtension {
     this.log('Starting event duplication process', eventDetails);
     
     try {
-      // Calculate tomorrow's date based on the event's date, not today's date
+      // Get the event element to extract the local calendar date
+      const eventElement = document.querySelector(`[data-eventid="${eventDetails.id}"]`) as HTMLElement;
+      
+      // Extract the local date from the calendar position (what the user sees)
       let eventDate: Date;
-      if (eventDetails.startDateTime) {
-        eventDate = new Date(eventDetails.startDateTime);
+      if (eventElement) {
+        const extractedDate = this.extractEventDateFromCalendarPosition(eventElement);
+        if (extractedDate) {
+          eventDate = extractedDate;
+          this.log('Using extracted local date:', eventDate.toDateString());
+        } else {
+          // Fallback to converting UTC to local date
+          eventDate = eventDetails.startDateTime ? new Date(eventDetails.startDateTime) : new Date();
+          this.log('Fallback to parsed date:', eventDate.toDateString());
+        }
       } else {
-        // Fallback to today if no event date is available
-        eventDate = new Date();
+        // Final fallback
+        eventDate = eventDetails.startDateTime ? new Date(eventDetails.startDateTime) : new Date();
+        this.log('No event element found, using parsed date:', eventDate.toDateString());
       }
       
       const tomorrow = new Date(eventDate);
       tomorrow.setDate(tomorrow.getDate() + 1);
       
-      this.log('Event date:', eventDate.toDateString());
-      this.log('Tomorrow (relative to event):', tomorrow.toDateString());
+      this.log('Event date (local):', eventDate.toDateString());
+      this.log('Tomorrow (relative to local event date):', tomorrow.toDateString());
       
       // Adjust event times for tomorrow
       const adjustedEvent = this.adjustEventForNewDate(eventDetails, tomorrow);
