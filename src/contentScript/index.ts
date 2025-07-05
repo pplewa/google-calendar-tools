@@ -1095,54 +1095,48 @@ class GoogleCalendarTools implements CalendarExtension {
       }
     }
     
-    // Method 2: Look for calendar name in specific patterns with better boundary detection
-    const calendarPatterns = [
-      /Organiser:\s*([A-Z][a-z]+)(?:[A-Z][a-z]+)*(?:\s|Created|$)/i,
-      /Organizer:\s*([A-Z][a-z]+)(?:[A-Z][a-z]+)*(?:\s|Created|$)/i,
-      /Calendar:\s*([A-Z][a-z]+)(?:[A-Z][a-z]+)*(?:\s|Created|$)/i,
-    ];
+    // Method 2: Look for "organiser:" pattern specifically
+    const organiserPattern = /(?:event\s*)?organiser:\s*([a-zA-Z][a-zA-Z0-9]*)/i;
+    const organiserMatch = popoverText.match(organiserPattern);
     
-    for (const pattern of calendarPatterns) {
-      const match = popoverText.match(pattern);
-      if (match && match[1]) {
-        const calendarName = match[1].toLowerCase();
-        this.log(`Found calendar name from pattern:`, calendarName);
-        return calendarName;
+    if (organiserMatch && organiserMatch[1]) {
+      let calendarName = organiserMatch[1].trim();
+      
+      // Handle cases where the name is repeated like "FamilyFamilyCreated"
+      // Look for the pattern where a word is repeated and followed by "Created"
+      const repeatedPattern = /^([a-zA-Z]+)\1(Created|Family)?/i;
+      const repeatedMatch = calendarName.match(repeatedPattern);
+      
+      if (repeatedMatch && repeatedMatch[1]) {
+        calendarName = repeatedMatch[1];
+        this.log('Found repeated calendar name, using first occurrence:', calendarName);
       }
+      
+      this.log('Found calendar name from organiser pattern:', calendarName);
+      return calendarName.toLowerCase();
     }
     
-    // Method 3: Look for standalone calendar names in separate elements
-    const allTextElements = Array.from(popover.querySelectorAll('span, div, p, h1, h2, h3'));
+    // Method 3: Look for specific calendar names in the content
+    const knownCalendars = ['family', 'peter', 'background', 'work', 'personal', 'home', 'business'];
+    const lowerText = popoverText.toLowerCase();
     
-    for (const element of allTextElements) {
-      const text = element.textContent?.trim();
-      if (!text) continue;
-      
-      // Check if this might be a standalone calendar name
-      const commonCalendarNames = [
-        'peter', 'background', 'family', 'work', 'personal', 'home', 'business',
-        'lisa', 'todo', 'todoist', 'birthdays', 'holidays', 'tasks', 'meetings'
+    for (const calendar of knownCalendars) {
+      // Look for the calendar name followed by common indicators
+      const patterns = [
+        new RegExp(`\\b${calendar}\\b.*?created`, 'i'),
+        new RegExp(`\\b${calendar}\\b.*?organis`, 'i'),
+        new RegExp(`organis.*?\\b${calendar}\\b`, 'i')
       ];
       
-      const lowercaseText = text.toLowerCase();
-      if (commonCalendarNames.includes(lowercaseText)) {
-        this.log('Found standalone calendar name:', lowercaseText);
-        return lowercaseText;
+      for (const pattern of patterns) {
+        if (lowerText.match(pattern)) {
+          this.log('Found calendar name from known patterns:', calendar);
+          return calendar;
+        }
       }
     }
     
-    // Method 4: Look for calendar info in data attributes
-    const calendarElements = popover.querySelectorAll('[data-calendar], [data-cal-id], [data-calendar-id]');
-    for (const element of calendarElements) {
-      const calendarId = element.getAttribute('data-calendar') || 
-                        element.getAttribute('data-cal-id') || 
-                        element.getAttribute('data-calendar-id');
-      if (calendarId) {
-        this.log('Found calendar ID from data attribute:', calendarId);
-        return calendarId;
-      }
-    }
-    
+    this.log('No calendar information found in popover');
     return null;
   }
 
