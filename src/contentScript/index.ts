@@ -1507,13 +1507,13 @@ class GoogleCalendarTools implements CalendarExtension {
 
   private formatDateTime(date: Date): string {
     // Format as YYYYMMDDTHHmmssZ (UTC)
-    const utcDate = new Date(date.getTime() - (date.getTimezoneOffset() * 60000));
-    const year = utcDate.getFullYear();
-    const month = String(utcDate.getMonth() + 1).padStart(2, '0');
-    const day = String(utcDate.getDate()).padStart(2, '0');
-    const hours = String(utcDate.getHours()).padStart(2, '0');
-    const minutes = String(utcDate.getMinutes()).padStart(2, '0');
-    const seconds = String(utcDate.getSeconds()).padStart(2, '0');
+    // Use the built-in UTC methods instead of manual timezone conversion
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    const hours = String(date.getUTCHours()).padStart(2, '0');
+    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(date.getUTCSeconds()).padStart(2, '0');
     
     return `${year}${month}${day}T${hours}${minutes}${seconds}Z`;
   }
