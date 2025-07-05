@@ -1324,20 +1324,27 @@ class GoogleCalendarTools implements CalendarExtension {
 
   private async createDuplicateEvent(eventDetails: EventDetails, targetDate: Date, calendarId: string): Promise<void> {
     // Use Google Calendar's native "Duplicate" button - this preserves the original calendar
-    const success = await this.useNativeDuplicate(eventDetails, targetDate);
+    const duplicateResult = await this.useNativeDuplicate(eventDetails, targetDate);
     
-    if (success) {
-      this.showNotification(
-        `Event "${eventDetails.title}" duplicated to tomorrow!\n\n✅ Successfully created in "${eventDetails.calendarId || 'original'}" calendar.`,
-        'success'
-      );
+    if (duplicateResult.created) {
+      if (duplicateResult.dateAdjusted) {
+        this.showNotification(
+          `Event "${eventDetails.title}" duplicated to tomorrow!\n\n✅ Successfully created in "${eventDetails.calendarId || 'original'}" calendar with correct date.`,
+          'success'
+        );
+      } else {
+        this.showNotification(
+          `Event "${eventDetails.title}" duplicated!\n\n✅ Created in "${eventDetails.calendarId || 'original'}" calendar.\n⚠️ Please check the date and adjust if needed.`,
+          'info'
+        );
+      }
       
       // Close popover and refresh
       await this.closeEventPopover();
       await this.refreshCalendarView();
       this.health.totalEnhanced++;
     } else {
-      // Fallback to URL method with clear instructions
+      // Fallback to URL method only if native duplicate completely failed
       await this.createEventViaURL(eventDetails);
       
       const calendarName = eventDetails.calendarId || 'unknown';
@@ -1351,20 +1358,20 @@ class GoogleCalendarTools implements CalendarExtension {
     }
   }
 
-  private async useNativeDuplicate(eventDetails: EventDetails, targetDate: Date): Promise<boolean> {
+  private async useNativeDuplicate(eventDetails: EventDetails, targetDate: Date): Promise<{created: boolean, dateAdjusted: boolean}> {
     try {
       // Find the current popover
       const popover = document.querySelector('div[role="dialog"], div[role="region"]');
       if (!popover) {
         this.log('No popover found for native duplicate');
-        return false;
+        return {created: false, dateAdjusted: false};
       }
 
       // Look for the "Duplicate" button
       const duplicateButton = this.findDuplicateButton(popover);
       if (!duplicateButton) {
         this.log('No Duplicate button found in popover');
-        return false;
+        return {created: false, dateAdjusted: false};
       }
 
       this.log('Found Duplicate button, clicking it');
@@ -1399,24 +1406,35 @@ class GoogleCalendarTools implements CalendarExtension {
         // Try to adjust the date in the dialog to tomorrow
         const dateAdjusted = await this.adjustDateInEventDialog(eventDialog, targetDate);
         
-        // Try to save the event
+        // Try to save the event - attempt save regardless of date adjustment
         const saved = await this.saveEventInDialog(eventDialog);
         
-        if (dateAdjusted && saved) {
-          this.log('Successfully duplicated and adjusted event');
-          return true;
+        if (saved) {
+          if (dateAdjusted) {
+            this.log('Successfully duplicated and adjusted event to tomorrow');
+            return {created: true, dateAdjusted: true};
+          } else {
+            this.log('Successfully duplicated event, but date adjustment failed - event created for original date');
+            return {created: true, dateAdjusted: false};
+          }
         } else {
-          this.log('Failed to adjust date or save event in dialog');
-          return false;
+          this.log('Event dialog appeared but failed to save - canceling to avoid wrong date');
+          // Try to close the dialog to avoid creating event with wrong date
+          const closeButton = eventDialog.querySelector('button[aria-label*="cancel"], button[aria-label*="close"]') as HTMLElement;
+          if (closeButton) {
+            closeButton.click();
+            this.log('Canceled event dialog');
+          }
+          return {created: false, dateAdjusted: false};
         }
       } else {
         this.log('No event creation dialog appeared after clicking duplicate button');
-        return false;
+        return {created: false, dateAdjusted: false};
       }
       
     } catch (error) {
       this.error('Error in native duplicate operation', error as Error);
-      return false;
+      return {created: false, dateAdjusted: false};
     }
   }
 
@@ -1491,33 +1509,51 @@ class GoogleCalendarTools implements CalendarExtension {
         for (const dateInput of dateInputs) {
           this.log(`Checking input - value: "${dateInput.value}", type: "${dateInput.type}", aria-label: "${dateInput.getAttribute('aria-label')}"`);
           
-          if (dateInput.value && (dateInput.type === 'date' || dateInput.value.match(/\d{4}-\d{2}-\d{2}/))) {
-            // Format target date as YYYY-MM-DD
-            const targetDateStr = targetDate.toISOString().split('T')[0];
+          // Check if this is a date input by aria-label and value format
+          const ariaLabel = (dateInput.getAttribute('aria-label') || '').toLowerCase();
+          const isDateInput = ariaLabel.includes('date') && 
+                              !ariaLabel.includes('time') && 
+                              dateInput.value && 
+                              dateInput.value.match(/\d+\s+\w+\s+\d{4}/); // "10 Jul 2025" format
+          
+          if (isDateInput) {
+            // Format target date as "DD MMM YYYY" to match Google Calendar's format
+            const targetDateStr = this.formatDateForGoogleCalendar(targetDate);
             
             this.log(`Adjusting date from "${dateInput.value}" to "${targetDateStr}"`);
             
-            // Clear and set new value
+            // Clear and set new value with proper event handling
             dateInput.focus();
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Select all text and delete it
             dateInput.select();
-            dateInput.value = '';
+            document.execCommand('delete');
             
-            // Set new value with events
-            dateInput.value = targetDateStr;
+            // Type the new date character by character to simulate real typing
+            for (const char of targetDateStr) {
+              dateInput.value += char;
+              dateInput.dispatchEvent(new Event('input', { bubbles: true }));
+              await new Promise(resolve => setTimeout(resolve, 50));
+            }
             
-            // Trigger all possible events
-            ['focus', 'input', 'change', 'blur', 'keydown', 'keyup'].forEach(eventType => {
-              dateInput.dispatchEvent(new Event(eventType, { bubbles: true }));
-            });
-            
-            // Also try triggering with specific key events
+            // Trigger all necessary events
+            dateInput.dispatchEvent(new Event('change', { bubbles: true }));
+            dateInput.dispatchEvent(new Event('blur', { bubbles: true }));
             dateInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
             
-            this.log(`Date input updated to: ${dateInput.value}`);
+            this.log(`Date input updated to: "${dateInput.value}"`);
             
             // Wait for the change to be processed
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            return true;
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Verify the change took effect
+            if (dateInput.value === targetDateStr) {
+              this.log('Date successfully updated and verified');
+              return true;
+            } else {
+              this.log(`Date update verification failed - expected: "${targetDateStr}", actual: "${dateInput.value}"`);
+            }
           }
         }
       }
@@ -1528,6 +1564,18 @@ class GoogleCalendarTools implements CalendarExtension {
       this.log('Could not adjust date in event dialog', error);
       return false;
     }
+  }
+
+  private formatDateForGoogleCalendar(date: Date): string {
+    // Format as "DD MMM YYYY" to match Google Calendar's input format
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    
+    const day = date.getDate();
+    const month = months[date.getMonth()];
+    const year = date.getFullYear();
+    
+    return `${day} ${month} ${year}`;
   }
 
   private async saveEventInDialog(dialog: Element): Promise<boolean> {
