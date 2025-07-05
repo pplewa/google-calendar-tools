@@ -1095,32 +1095,28 @@ class GoogleCalendarTools implements CalendarExtension {
       }
     }
     
-    // Method 2: Look for calendar name and try to map it to email format
+    // Method 2: Look for calendar name in specific patterns with better boundary detection
+    const calendarPatterns = [
+      /Organiser:\s*([A-Z][a-z]+)(?:[A-Z][a-z]+)*(?:\s|Created|$)/i,
+      /Organizer:\s*([A-Z][a-z]+)(?:[A-Z][a-z]+)*(?:\s|Created|$)/i,
+      /Calendar:\s*([A-Z][a-z]+)(?:[A-Z][a-z]+)*(?:\s|Created|$)/i,
+    ];
+    
+    for (const pattern of calendarPatterns) {
+      const match = popoverText.match(pattern);
+      if (match && match[1]) {
+        const calendarName = match[1].toLowerCase();
+        this.log(`Found calendar name from pattern:`, calendarName);
+        return calendarName;
+      }
+    }
+    
+    // Method 3: Look for standalone calendar names in separate elements
     const allTextElements = Array.from(popover.querySelectorAll('span, div, p, h1, h2, h3'));
     
     for (const element of allTextElements) {
       const text = element.textContent?.trim();
       if (!text) continue;
-      
-      // Check if this element contains a calendar name
-      const calendarIndicators = [
-        'calendar:', 'cal:', 'in calendar', 'from calendar', 'organiser:', 'organizer:'
-      ];
-      
-      const lowercaseText = text.toLowerCase();
-      for (const indicator of calendarIndicators) {
-        if (lowercaseText.includes(indicator)) {
-          // Extract the calendar name after the indicator
-          const parts = text.split(new RegExp(indicator, 'i'));
-          if (parts.length > 1) {
-            const calendarName = parts[1].trim().split(/\s+/)[0];
-            if (calendarName) {
-              this.log('Found calendar name from indicator:', calendarName);
-              return this.mapCalendarNameToId(calendarName);
-            }
-          }
-        }
-      }
       
       // Check if this might be a standalone calendar name
       const commonCalendarNames = [
@@ -1128,13 +1124,14 @@ class GoogleCalendarTools implements CalendarExtension {
         'lisa', 'todo', 'todoist', 'birthdays', 'holidays', 'tasks', 'meetings'
       ];
       
+      const lowercaseText = text.toLowerCase();
       if (commonCalendarNames.includes(lowercaseText)) {
         this.log('Found standalone calendar name:', lowercaseText);
-        return this.mapCalendarNameToId(lowercaseText);
+        return lowercaseText;
       }
     }
     
-    // Method 3: Look for calendar info in data attributes
+    // Method 4: Look for calendar info in data attributes
     const calendarElements = popover.querySelectorAll('[data-calendar], [data-cal-id], [data-calendar-id]');
     for (const element of calendarElements) {
       const calendarId = element.getAttribute('data-calendar') || 
@@ -1147,41 +1144,6 @@ class GoogleCalendarTools implements CalendarExtension {
     }
     
     return null;
-  }
-  
-  private mapCalendarNameToId(calendarName: string): string {
-    const name = calendarName.toLowerCase();
-    
-    // Common calendar name mappings - these are educated guesses based on common patterns
-    const nameMap: { [key: string]: string } = {
-      'peter': 'peter@gmail.com',
-      'family': 'family@gmail.com', 
-      'background': 'background@gmail.com',
-      'work': 'work@gmail.com',
-      'personal': 'personal@gmail.com',
-      'home': 'home@gmail.com',
-      'business': 'business@gmail.com',
-      'lisa': 'lisa@gmail.com',
-      'todo': 'todo@gmail.com',
-      'todoist': 'todoist@gmail.com',
-      'birthdays': 'birthdays@gmail.com',
-      'holidays': 'holidays@gmail.com',
-      'tasks': 'tasks@gmail.com',
-      'meetings': 'meetings@gmail.com'
-    };
-    
-    // If we have a direct mapping, use it
-    if (nameMap[name]) {
-      return nameMap[name];
-    }
-    
-    // If it looks like it might already be an email or ID, return as-is
-    if (name.includes('@') || name.includes('.')) {
-      return name;
-    }
-    
-    // Default: try to construct a reasonable email address
-    return `${name}@gmail.com`;
   }
 
   private async duplicateEventToTomorrow(eventDetails: EventDetails): Promise<void> {
@@ -1221,11 +1183,16 @@ class GoogleCalendarTools implements CalendarExtension {
       // Create event in the background using Google Calendar's quick add
       await this.createEventInBackground(adjustedEvent);
       
-      // Show success notification
-      this.showNotification(
-        `Event "${eventDetails.title}" duplicated to tomorrow successfully!`,
-        'success'
-      );
+      // Show success notification with calendar information
+      const originalCalendar = eventDetails.calendarId || 'Unknown';
+      let notificationMessage = `Event "${eventDetails.title}" duplicated to tomorrow!`;
+      
+      // If the original event was from a custom calendar, inform the user
+      if (eventDetails.calendarId && eventDetails.calendarId !== 'primary') {
+        notificationMessage += `\n\n⚠️ Note: Created in your primary calendar. Original was in "${originalCalendar}" calendar.`;
+      }
+      
+      this.showNotification(notificationMessage, 'success');
       
       // Close the current popover
       await this.closeEventPopover();
@@ -1286,12 +1253,17 @@ class GoogleCalendarTools implements CalendarExtension {
   }
 
   private async createEventViaGoogleCalendarAPI(eventDetails: EventDetails): Promise<void> {
-    // Use the extracted calendar ID from the original event, or fall back to guessing
-    let calendarId = eventDetails.calendarId || this.extractCalendarId() || 'primary';
+    // Use the extracted calendar ID from the original event, or fall back to primary
+    let calendarId = 'primary';
     
     // Normalize the calendar ID to proper format
     if (eventDetails.calendarId) {
-      calendarId = this.normalizeCalendarId(eventDetails.calendarId);
+      const normalizedId = this.normalizeCalendarId(eventDetails.calendarId);
+      if (normalizedId !== 'primary') {
+        calendarId = normalizedId;
+      } else {
+        this.log('Using primary calendar for API call since custom calendar ID cannot be determined');
+      }
     }
     
     this.log('Using calendar ID for duplication:', calendarId);
@@ -1524,12 +1496,16 @@ class GoogleCalendarTools implements CalendarExtension {
     // Required action parameter
     params.append('action', 'TEMPLATE');
     
-    // Add calendar ID if available - this is crucial for targeting the right calendar
+    // Add calendar ID only if we have a reliable one (system calendars)
     if (eventDetails.calendarId) {
-      // Convert display name to proper calendar ID format if needed
-      const calendarId = this.normalizeCalendarId(eventDetails.calendarId);
-      params.append('src', calendarId);
-      this.log('Using calendar ID in URL:', calendarId);
+      const normalizedId = this.normalizeCalendarId(eventDetails.calendarId);
+      // Only include calendar ID if it's not 'primary' (which means we couldn't map it)
+      if (normalizedId !== 'primary') {
+        params.append('src', normalizedId);
+        this.log('Using calendar ID in URL:', normalizedId);
+      } else {
+        this.log('Skipping calendar ID in URL - letting Google Calendar handle calendar selection');
+      }
     }
     
     // Add title
@@ -1552,12 +1528,22 @@ class GoogleCalendarTools implements CalendarExtension {
       params.append('location', eventDetails.location);
     }
     
-    // Add description
-    if (eventDetails.description) {
-      params.append('details', eventDetails.description);
-    } else {
-      params.append('details', '[Duplicated by Google Calendar Tools]');
+    // Add description with helpful calendar information
+    let description = '[Duplicated by Google Calendar Tools]';
+    
+    if (eventDetails.calendarId && eventDetails.calendarId !== 'primary') {
+      description += `\n\n📅 CALENDAR NOTE: This event was originally in your "${eventDetails.calendarId}" calendar.`;
+      description += `\n\nTo move this event to the correct calendar:`;
+      description += `\n1. After saving, click on this event`;
+      description += `\n2. Click "Edit event"`;
+      description += `\n3. Change the calendar dropdown to "${eventDetails.calendarId}"`;
+      description += `\n4. Click "Save"`;
     }
+    
+    if (eventDetails.description) {
+      description = `${eventDetails.description}\n\n${description}`;
+    }
+    params.append('details', description);
     
     const url = `${baseUrl}?${params.toString()}`;
     this.log('Built event creation URL:', url);
@@ -1570,91 +1556,25 @@ class GoogleCalendarTools implements CalendarExtension {
       return calendarId;
     }
     
-    // Try to get user's email from the page context
-    const userEmail = this.extractUserEmailFromPage();
-    if (userEmail) {
-      // If we have the user's email, we can try to construct calendar IDs
-      const domain = userEmail.split('@')[1];
-      
-      // For common calendar names, try to construct proper IDs
-      const specialCalendars: { [key: string]: string } = {
-        'family': `family@${domain}`,
-        'work': `work@${domain}`,
-        'personal': `personal@${domain}`,
-        'home': `home@${domain}`,
-        'background': `background@${domain}`,
-        'peter': `peter@${domain}`,
-        'lisa': `lisa@${domain}`,
-        'birthdays': `#contacts@group.v.calendar.google.com`,
-        'holidays': `#holiday@group.v.calendar.google.com`,
-        'tasks': `#tasks@group.calendar.google.com`
-      };
-      
-      if (specialCalendars[calendarId.toLowerCase()]) {
-        return specialCalendars[calendarId.toLowerCase()];
-      }
-      
-      // Default: try with the same domain as user
-      return `${calendarId}@${domain}`;
+    // For special system calendars, use known IDs
+    const systemCalendars: { [key: string]: string } = {
+      'birthdays': '#contacts@group.v.calendar.google.com',
+      'holidays': '#holiday@group.v.calendar.google.com',
+      'tasks': '#tasks@group.calendar.google.com'
+    };
+    
+    const lowerCalendarId = calendarId.toLowerCase();
+    if (systemCalendars[lowerCalendarId]) {
+      return systemCalendars[lowerCalendarId];
     }
     
-    // Fallback: use the mapping we created earlier
-    return this.mapCalendarNameToId(calendarId);
+    // For user-created calendars, we can't easily guess the ID
+    // Instead, let's return null to fall back to 'primary' calendar
+    // since Google will handle the calendar selection in the UI
+    this.log(`Cannot normalize custom calendar ID: ${calendarId}, falling back to primary`);
+    return 'primary';
   }
-  
-  private extractUserEmailFromPage(): string | null {
-    // Try to find the user's email from various places on the page
-    const selectors = [
-      'a[href*="mailto:"]',
-      '[data-email]',
-      '.gb_A', // Google account info
-      '[aria-label*="@"]',
-      '[title*="@"]'
-    ];
-    
-    for (const selector of selectors) {
-      const elements = document.querySelectorAll(selector);
-      for (const element of elements) {
-        const email = this.extractEmailFromElement(element as HTMLElement);
-        if (email) {
-          return email;
-        }
-      }
-    }
-    
-    return null;
-  }
-  
-  private extractEmailFromElement(element: HTMLElement): string | null {
-    // Check href attribute for mailto links
-    if (element.getAttribute('href')?.includes('mailto:')) {
-      const href = element.getAttribute('href')!;
-      const email = href.replace('mailto:', '').split('?')[0];
-      if (this.isValidEmail(email)) {
-        return email;
-      }
-    }
-    
-    // Check data attributes
-    const dataEmail = element.getAttribute('data-email');
-    if (dataEmail && this.isValidEmail(dataEmail)) {
-      return dataEmail;
-    }
-    
-    // Check text content for email addresses
-    const text = element.textContent || element.getAttribute('aria-label') || element.getAttribute('title') || '';
-    const emailMatch = text.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
-    if (emailMatch && this.isValidEmail(emailMatch[1])) {
-      return emailMatch[1];
-    }
-    
-    return null;
-  }
-  
-  private isValidEmail(email: string): boolean {
-    const emailPattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    return emailPattern.test(email);
-  }
+
 
   private adjustEventForNewDate(eventDetails: EventDetails, targetDate: Date): EventDetails {
     const adjusted = { ...eventDetails };
@@ -1749,12 +1669,16 @@ class GoogleCalendarTools implements CalendarExtension {
     // Required action parameter
     params.append('action', 'TEMPLATE');
     
-    // Add calendar ID if available - this is crucial for targeting the right calendar
+    // Add calendar ID only if we have a reliable one (system calendars)
     if (eventDetails.calendarId) {
-      // Convert display name to proper calendar ID format if needed
-      const calendarId = this.normalizeCalendarId(eventDetails.calendarId);
-      params.append('src', calendarId);
-      this.log('Using calendar ID in URL:', calendarId);
+      const normalizedId = this.normalizeCalendarId(eventDetails.calendarId);
+      // Only include calendar ID if it's not 'primary' (which means we couldn't map it)
+      if (normalizedId !== 'primary') {
+        params.append('src', normalizedId);
+        this.log('Using calendar ID in URL:', normalizedId);
+      } else {
+        this.log('Skipping calendar ID in URL - letting Google Calendar handle calendar selection');
+      }
     }
     
     // Add title
@@ -1777,12 +1701,15 @@ class GoogleCalendarTools implements CalendarExtension {
       params.append('location', eventDetails.location);
     }
     
-    // Add description
-    if (eventDetails.description) {
-      params.append('details', eventDetails.description);
-    } else {
-      params.append('details', '[Duplicated by Google Calendar Tools]');
+    // Add description with calendar hint
+    let description = '[Duplicated by Google Calendar Tools]';
+    if (eventDetails.calendarId) {
+      description += `\n\nOriginal calendar: ${eventDetails.calendarId}`;
     }
+    if (eventDetails.description) {
+      description = `${eventDetails.description}\n\n${description}`;
+    }
+    params.append('details', description);
     
     const url = `${baseUrl}?${params.toString()}`;
     this.log('Built calendar event URL:', url);
