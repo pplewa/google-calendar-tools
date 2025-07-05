@@ -1372,21 +1372,43 @@ class GoogleCalendarTools implements CalendarExtension {
       // Click the duplicate button
       duplicateButton.click();
       
-      // Wait for the duplicate creation dialog to appear
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Wait for the duplicate creation dialog to appear - wait longer and check multiple times
+      let eventDialog = null;
+      for (let i = 0; i < 10; i++) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Look for various dialog patterns
+        eventDialog = document.querySelector([
+          'div[role="dialog"]:has(input[aria-label*="Title"])',
+          'div[role="dialog"]:has(button[aria-label*="Save"])',
+          'div[role="dialog"]:has(input[value*="test"])',
+          'div[jscontroller]:has(input[aria-label*="Title"])',
+          '[data-is-touch-wrapper] div:has(input[aria-label*="Title"])',
+          'div[role="dialog"]'
+        ].join(', '));
+        
+        if (eventDialog) {
+          this.log(`Event dialog found after ${(i + 1) * 500}ms`);
+          break;
+        }
+      }
       
-      // Look for the event creation/edit dialog
-      const eventDialog = document.querySelector('div[role="dialog"][aria-label*="event"], div[role="dialog"][aria-label*="Event"], div[role="dialog"]:has(input[type="text"][value*="' + eventDetails.title + '"])');
       if (eventDialog) {
-        this.log('Event creation dialog opened after duplicate, adjusting date to tomorrow');
+        this.log('Event creation dialog appeared after clicking duplicate');
         
         // Try to adjust the date in the dialog to tomorrow
-        await this.adjustDateInEventDialog(eventDialog, targetDate);
+        const dateAdjusted = await this.adjustDateInEventDialog(eventDialog, targetDate);
         
         // Try to save the event
-        await this.saveEventInDialog(eventDialog);
+        const saved = await this.saveEventInDialog(eventDialog);
         
-        return true;
+        if (dateAdjusted && saved) {
+          this.log('Successfully duplicated and adjusted event');
+          return true;
+        } else {
+          this.log('Failed to adjust date or save event in dialog');
+          return false;
+        }
       } else {
         this.log('No event creation dialog appeared after clicking duplicate button');
         return false;
@@ -1447,63 +1469,145 @@ class GoogleCalendarTools implements CalendarExtension {
     return null;
   }
 
-  private async adjustDateInEventDialog(dialog: Element, targetDate: Date): Promise<void> {
+  private async adjustDateInEventDialog(dialog: Element, targetDate: Date): Promise<boolean> {
     try {
-      // Look for date input fields
-      const dateInputs = Array.from(dialog.querySelectorAll('input[type="date"], input[aria-label*="date"], input[placeholder*="date"], input[aria-label*="Date"]'));
+      this.log('Looking for date inputs in dialog');
       
-      for (const input of dateInputs) {
-        const dateInput = input as HTMLInputElement;
-        if (dateInput.value) {
-          // Format target date as YYYY-MM-DD
-          const targetDateStr = targetDate.toISOString().split('T')[0];
+      // Look for date input fields with various selectors
+      const dateSelectors = [
+        'input[type="date"]',
+        'input[aria-label*="date"]', 
+        'input[aria-label*="Date"]',
+        'input[placeholder*="date"]',
+        'input[data-initial-value]',
+        'input[jsname]',
+        'input[aria-describedby]'
+      ];
+      
+      for (const selector of dateSelectors) {
+        const dateInputs = Array.from(dialog.querySelectorAll(selector)) as HTMLInputElement[];
+        this.log(`Found ${dateInputs.length} inputs with selector: ${selector}`);
+        
+        for (const dateInput of dateInputs) {
+          this.log(`Checking input - value: "${dateInput.value}", type: "${dateInput.type}", aria-label: "${dateInput.getAttribute('aria-label')}"`);
           
-          this.log(`Adjusting date from ${dateInput.value} to ${targetDateStr}`);
-          
-          // Update the input
-          dateInput.value = targetDateStr;
-          dateInput.dispatchEvent(new Event('change', { bubbles: true }));
-          dateInput.dispatchEvent(new Event('input', { bubbles: true }));
-          dateInput.dispatchEvent(new Event('blur', { bubbles: true }));
-          
-          // Wait for the change to be processed
-          await new Promise(resolve => setTimeout(resolve, 500));
-          break;
+          if (dateInput.value && (dateInput.type === 'date' || dateInput.value.match(/\d{4}-\d{2}-\d{2}/))) {
+            // Format target date as YYYY-MM-DD
+            const targetDateStr = targetDate.toISOString().split('T')[0];
+            
+            this.log(`Adjusting date from "${dateInput.value}" to "${targetDateStr}"`);
+            
+            // Clear and set new value
+            dateInput.focus();
+            dateInput.select();
+            dateInput.value = '';
+            
+            // Set new value with events
+            dateInput.value = targetDateStr;
+            
+            // Trigger all possible events
+            ['focus', 'input', 'change', 'blur', 'keydown', 'keyup'].forEach(eventType => {
+              dateInput.dispatchEvent(new Event(eventType, { bubbles: true }));
+            });
+            
+            // Also try triggering with specific key events
+            dateInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+            
+            this.log(`Date input updated to: ${dateInput.value}`);
+            
+            // Wait for the change to be processed
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            return true;
+          }
         }
       }
+      
+      this.log('No date input found or successfully updated');
+      return false;
     } catch (error) {
       this.log('Could not adjust date in event dialog', error);
+      return false;
     }
   }
 
-  private async saveEventInDialog(dialog: Element): Promise<void> {
+  private async saveEventInDialog(dialog: Element): Promise<boolean> {
     try {
-      // Look for save/create button
-      const buttons = Array.from(dialog.querySelectorAll('button, [role="button"]'));
+      this.log('Looking for save button in dialog');
       
-      for (const button of buttons) {
-        const text = (button.textContent || '').toLowerCase();
+      // Look for save/create button with various approaches
+      const buttonSelectors = [
+        'button[aria-label*="Save"]',
+        'button:contains("Save")',
+        'button[data-mdc-dialog-action="save"]',
+        'button[type="submit"]',
+        'div[role="button"][aria-label*="Save"]',
+        'button',
+        '[role="button"]'
+      ];
+      
+      // Also look by text content
+      const allButtons = Array.from(dialog.querySelectorAll('button, [role="button"]')) as HTMLElement[];
+      this.log(`Found ${allButtons.length} buttons/clickable elements in dialog`);
+      
+      for (const button of allButtons) {
+        const text = (button.textContent || '').toLowerCase().trim();
         const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
         
-        if (text.includes('save') || 
-            text.includes('create') ||
-            text.includes('done') ||
+        this.log(`Button text: "${text}", aria-label: "${ariaLabel}"`);
+        
+        if (text === 'save' || 
+            text.includes('save') ||
             ariaLabel.includes('save') ||
+            text === 'create' ||
+            text.includes('create') ||
             ariaLabel.includes('create') ||
+            text === 'done' ||
             ariaLabel.includes('done')) {
           
-          this.log(`Clicking save button: ${button.textContent?.trim()}`);
-          (button as HTMLElement).click();
+          this.log(`Clicking save button: "${button.textContent?.trim()}" (aria-label: "${button.getAttribute('aria-label')}")`);
+          
+          // Scroll button into view and click
+          button.scrollIntoView();
+          button.focus();
+          button.click();
           
           // Wait for save to complete
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          return;
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // Check if dialog is closed (successful save)
+          if (!document.contains(dialog)) {
+            this.log('Dialog closed after clicking save - success');
+            return true;
+          } else {
+            this.log('Dialog still open after clicking save button');
+          }
         }
       }
       
-      this.log('No save button found in event dialog');
+      // If no explicit save button found, try the first blue/primary button
+      const primaryButtons = allButtons.filter(btn => {
+        const styles = window.getComputedStyle(btn);
+        return styles.backgroundColor.includes('rgb(26, 115, 232)') || // Google blue
+               btn.classList.contains('primary') ||
+               btn.classList.contains('mdc-button--raised');
+      });
+      
+      if (primaryButtons.length > 0) {
+        this.log('Trying primary/blue button as save button');
+        primaryButtons[0].click();
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        if (!document.contains(dialog)) {
+          this.log('Dialog closed after clicking primary button - success');
+          return true;
+        }
+      }
+      
+      this.log('No working save button found in event dialog');
+      return false;
     } catch (error) {
       this.log('Could not save event in dialog', error);
+      return false;
     }
   }
 
