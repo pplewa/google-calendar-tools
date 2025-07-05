@@ -996,13 +996,20 @@ class GoogleCalendarTools implements CalendarExtension {
     this.log('Starting event duplication process', eventDetails);
     
     try {
-      // Calculate tomorrow's date - fixing the date calculation issue
-      const today = new Date();
-      const tomorrow = new Date(today);
+      // Calculate tomorrow's date based on the event's date, not today's date
+      let eventDate: Date;
+      if (eventDetails.startDateTime) {
+        eventDate = new Date(eventDetails.startDateTime);
+      } else {
+        // Fallback to today if no event date is available
+        eventDate = new Date();
+      }
+      
+      const tomorrow = new Date(eventDate);
       tomorrow.setDate(tomorrow.getDate() + 1);
       
-      this.log('Today:', today.toDateString());
-      this.log('Tomorrow:', tomorrow.toDateString());
+      this.log('Event date:', eventDate.toDateString());
+      this.log('Tomorrow (relative to event):', tomorrow.toDateString());
       
       // Adjust event times for tomorrow
       const adjustedEvent = this.adjustEventForNewDate(eventDetails, tomorrow);
