@@ -52,10 +52,10 @@ class GoogleCalendarTools implements CalendarExtension {
   private readonly RESILIENCE_CONFIG = {
     maxRetries: 3,
     retryDelay: 1000, // ms
-    healthCheckInterval: 30000, // 30 seconds
+    healthCheckInterval: 2000, // OPTIMIZED: 2 seconds instead of 30 seconds
     maxErrorCount: 10,
-    staleEventThreshold: 300000, // 5 minutes
-    enhancementTimeout: 5000, // 5 seconds max per enhancement
+    staleEventThreshold: 60000, // OPTIMIZED: 1 minute instead of 5 minutes
+    enhancementTimeout: 2000, // OPTIMIZED: 2 seconds instead of 5 seconds
   };
   
   // Selectors based on research with fallbacks
@@ -2471,20 +2471,44 @@ class GoogleCalendarTools implements CalendarExtension {
       this.observer.disconnect();
     }
 
-    // Debouncing variables for performance optimization
+    // OPTIMIZED: Reduced debounce for faster responsiveness
     let debounceTimer: NodeJS.Timeout | null = null;
-    const DEBOUNCE_DELAY = 150; // ms
+    const DEBOUNCE_DELAY = 50; // OPTIMIZED: 50ms instead of 150ms
+    let immediateProcessing = false;
 
     this.observer = new MutationObserver((mutations) => {
-      // Clear existing debounce timer
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-      }
+      // OPTIMIZED: Immediate processing for critical event card additions
+      const hasEventCardMutations = mutations.some(mutation => {
+        if (mutation.type === 'childList') {
+          return Array.from(mutation.addedNodes).some(node => {
+            if (node instanceof HTMLElement) {
+              return node.hasAttribute('data-eventid') || 
+                     node.querySelector('[data-eventid]') !== null;
+            }
+            return false;
+          });
+        }
+        return false;
+      });
 
-      // Debounce the mutation processing for performance
-      debounceTimer = setTimeout(() => {
+      if (hasEventCardMutations && !immediateProcessing) {
+        // Process immediately for event card additions
+        immediateProcessing = true;
         this.processMutations(mutations);
-      }, DEBOUNCE_DELAY);
+        setTimeout(() => { immediateProcessing = false; }, 100);
+      } else {
+        // Clear existing debounce timer
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+        }
+
+        // Debounce other mutations for performance
+        debounceTimer = setTimeout(() => {
+          if (!immediateProcessing) {
+            this.processMutations(mutations);
+          }
+        }, DEBOUNCE_DELAY);
+      }
     });
 
     // Start observing with comprehensive configuration
@@ -2527,17 +2551,21 @@ class GoogleCalendarTools implements CalendarExtension {
                 addedEvents++;
               }
               
-              // Check for event cards within added subtrees with resilience
+              // OPTIMIZED: Check for event cards within added node only (not entire document)
               try {
-                const eventCards = this.findElementsWithFallbacks(selectors.map(s => `${s}`));
-                if (eventCards) {
-                  eventCards.forEach((card) => {
-                    if (!processedElements.has(card)) {
-                      processedElements.add(card);
-                      this.enhanceEventCardWithResilience(card);
-                      addedEvents++;
-                    }
-                  });
+                const selectors = [this.SELECTORS.eventCard, ...this.SELECTORS.eventCardFallbacks];
+                for (const selector of selectors) {
+                  const eventCardsInNode = node.querySelectorAll(selector) as NodeListOf<HTMLElement>;
+                  if (eventCardsInNode.length > 0) {
+                    eventCardsInNode.forEach((card) => {
+                      if (!processedElements.has(card)) {
+                        processedElements.add(card);
+                        this.enhanceEventCardWithResilience(card);
+                        addedEvents++;
+                      }
+                    });
+                    break; // Found events with this selector, no need to try others
+                  }
                 }
               } catch (error) {
                 // Log but don't break the entire process
@@ -2557,18 +2585,23 @@ class GoogleCalendarTools implements CalendarExtension {
                   this.log(`Cleaned up removed event: ${eventId}`);
                 }
                 
-                // Also check for removed event cards in subtrees
+                // OPTIMIZED: Check for removed event cards within the removed node only
                 const selectors = [this.SELECTORS.eventCard, ...this.SELECTORS.eventCardFallbacks];
-                const removedCards = this.findElementsWithFallbacks(selectors);
-                if (removedCards) {
-                  removedCards.forEach((card) => {
-                    const cardEventId = card.getAttribute('data-eventid');
-                    if (cardEventId && this.eventCards.has(cardEventId)) {
-                      this.eventCards.delete(cardEventId);
-                      removedEvents++;
-                      this.log(`Cleaned up removed nested event: ${cardEventId}`);
-                    }
-                  });
+                for (const selector of selectors) {
+                  try {
+                    const removedCards = node.querySelectorAll(selector) as NodeListOf<HTMLElement>;
+                    removedCards.forEach((card) => {
+                      const cardEventId = card.getAttribute('data-eventid');
+                      if (cardEventId && this.eventCards.has(cardEventId)) {
+                        this.eventCards.delete(cardEventId);
+                        removedEvents++;
+                        this.log(`Cleaned up removed nested event: ${cardEventId}`);
+                      }
+                    });
+                  } catch (error) {
+                    // Continue with next selector if this one fails
+                    continue;
+                  }
                 }
               } catch (error) {
                 // Log but continue processing
@@ -2605,7 +2638,8 @@ class GoogleCalendarTools implements CalendarExtension {
             // Handle calendar view changes
             if (mutation.attributeName === 'class' && this.isCalendarViewChange(target)) {
               this.log('Calendar view change detected, rescanning events');
-              setTimeout(() => this.handleViewChange(), 500); // Delay to let view settle
+              // OPTIMIZED: Immediate view change handling with shorter delay
+              setTimeout(() => this.handleViewChange(), 100); // OPTIMIZED: 100ms instead of 500ms
             }
           } catch (error) {
             // Log but continue processing
@@ -2617,6 +2651,13 @@ class GoogleCalendarTools implements CalendarExtension {
       // Log summary if there were changes
       if (addedEvents > 0 || removedEvents > 0) {
         this.log(`DOM changes processed: +${addedEvents} events, -${removedEvents} events`);
+      }
+      
+      // OPTIMIZED: Trigger immediate fast scan if no events were processed but DOM changed significantly
+      if (addedEvents === 0 && mutations.length > 5) {
+        // Significant DOM changes but no events processed - might be calendar view changes
+        this.log('Significant DOM changes detected, triggering fast scan');
+        setTimeout(() => this.fastScanForNewEvents(), 10); // Very short delay
       }
 
     } catch (error) {
@@ -2658,11 +2699,48 @@ class GoogleCalendarTools implements CalendarExtension {
         this.log(`Cleaned up ${cleanedUp} stale event references`);
       }
       
-      // Rescan for new events in the current view
-      this.scanForEventCardsWithResilience();
+      // OPTIMIZED: Use fast scanning for immediate response
+      this.fastScanForNewEvents();
       
     } catch (error) {
       this.error('Error handling view change', error as Error);
+    }
+  }
+
+  // OPTIMIZED: Fast scanning method for immediate response to changes
+  private fastScanForNewEvents(): void {
+    try {
+      // Use a more targeted approach for faster scanning
+      const selectors = [this.SELECTORS.eventCard, ...this.SELECTORS.eventCardFallbacks];
+      let foundEvents = 0;
+      
+      for (const selector of selectors) {
+        try {
+          const eventCards = document.querySelectorAll(selector) as NodeListOf<HTMLElement>;
+          if (eventCards.length > 0) {
+            eventCards.forEach((card) => {
+              const eventId = card.getAttribute('data-eventid');
+              if (eventId && !this.eventCards.has(eventId)) {
+                this.enhanceEventCardWithResilience(card);
+                foundEvents++;
+              }
+            });
+            break; // Found events with this selector, stop trying others
+          }
+        } catch (error) {
+          // Continue with next selector
+          continue;
+        }
+      }
+      
+      if (foundEvents > 0) {
+        this.log(`Fast scan: Enhanced ${foundEvents} new events`);
+      }
+      
+    } catch (error) {
+      this.error('Error in fast event scanning', error as Error);
+      // Fallback to regular scanning
+      this.scanForEventCardsWithResilience();
     }
   }
 
