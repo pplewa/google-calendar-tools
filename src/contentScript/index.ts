@@ -32,6 +32,7 @@ interface EventDetails {
   isAllDay: boolean;
   location: string;
   description: string;
+  calendarId?: string; // Add calendar ID to preserve original calendar
 }
 
 class GoogleCalendarTools implements CalendarExtension {
@@ -579,6 +580,8 @@ class GoogleCalendarTools implements CalendarExtension {
     // Extract description
     const description = this.extractDescription(popover);
 
+    const calendarId = eventCard?.element ? this.extractCalendarInfo(eventCard.element, popover) : null;
+
     const eventDetails: EventDetails = {
       id: eventId,
       title,
@@ -586,7 +589,8 @@ class GoogleCalendarTools implements CalendarExtension {
       endDateTime: timeInfo.endDateTime,
       isAllDay: timeInfo.isAllDay,
       location,
-      description
+      description,
+      calendarId: calendarId || undefined,
     };
 
     this.log('Extracted event details:', eventDetails);
@@ -992,6 +996,164 @@ class GoogleCalendarTools implements CalendarExtension {
     return '';
   }
 
+  private extractCalendarInfo(eventElement: HTMLElement, popover: Element): string | null {
+    // Method 1: Extract from event card element
+    const calendarIdFromCard = this.extractCalendarFromEventCard(eventElement);
+    if (calendarIdFromCard) {
+      this.log('Found calendar ID from event card:', calendarIdFromCard);
+      return calendarIdFromCard;
+    }
+
+    // Method 2: Extract from popover content
+    const calendarIdFromPopover = this.extractCalendarFromPopover(popover);
+    if (calendarIdFromPopover) {
+      this.log('Found calendar ID from popover:', calendarIdFromPopover);
+      return calendarIdFromPopover;
+    }
+
+    this.log('Could not extract calendar information from event');
+    return null;
+  }
+
+  private extractCalendarFromEventCard(eventElement: HTMLElement): string | null {
+    // Try to extract calendar info from the event card element
+    
+    // Look for data attributes that might contain calendar info
+    const possibleCalendarAttrs = [
+      'data-calendar-id',
+      'data-calendar',
+      'data-cal-id',
+      'data-calendar-name'
+    ];
+    
+    for (const attr of possibleCalendarAttrs) {
+      const value = eventElement.getAttribute(attr);
+      if (value) {
+        return value;
+      }
+    }
+    
+    // Try to extract from parent elements
+    let currentElement = eventElement;
+    while (currentElement && currentElement !== document.body) {
+      for (const attr of possibleCalendarAttrs) {
+        const value = currentElement.getAttribute(attr);
+        if (value) {
+          return value;
+        }
+      }
+      currentElement = currentElement.parentElement as HTMLElement;
+    }
+    
+    // Try to extract from CSS classes that might indicate calendar
+    const classList = eventElement.classList;
+    for (const className of classList) {
+      // Look for patterns like "calendar-xyz" or "cal-xyz"
+      const calendarMatch = className.match(/^(?:calendar|cal)[-_](.+)$/);
+      if (calendarMatch) {
+        return calendarMatch[1];
+      }
+    }
+    
+    // Try to extract from event color/style
+    const computedStyle = window.getComputedStyle(eventElement);
+    const backgroundColor = computedStyle.backgroundColor;
+    
+    // Map common calendar colors to calendar names (this is a fallback)
+    const colorToCalendar: { [key: string]: string } = {
+      'rgb(66, 133, 244)': 'primary', // Google blue
+      'rgb(219, 68, 55)': 'personal', // Red
+      'rgb(15, 157, 88)': 'work', // Green
+      'rgb(255, 193, 7)': 'family', // Yellow
+      'rgb(156, 39, 176)': 'other', // Purple
+    };
+    
+    if (backgroundColor && colorToCalendar[backgroundColor]) {
+      return colorToCalendar[backgroundColor];
+    }
+    
+    return null;
+  }
+
+  private extractCalendarFromPopover(popover: Element): string | null {
+    // Look for calendar name in the popover content
+    const allTextElements = Array.from(popover.querySelectorAll('span, div, p, h1, h2, h3'));
+    
+    // Look for calendar name patterns
+    for (const element of allTextElements) {
+      const text = element.textContent?.trim();
+      if (!text) continue;
+      
+      // Check if this element contains a calendar name
+      const calendarIndicators = [
+        'calendar:', 'cal:', 'in calendar', 'from calendar'
+      ];
+      
+      const lowercaseText = text.toLowerCase();
+      for (const indicator of calendarIndicators) {
+        if (lowercaseText.includes(indicator)) {
+          // Extract the calendar name after the indicator
+          const parts = text.split(new RegExp(indicator, 'i'));
+          if (parts.length > 1) {
+            const calendarName = parts[1].trim();
+            if (calendarName) {
+              return calendarName;
+            }
+          }
+        }
+      }
+      
+      // Look for standalone calendar names that might appear in the popover
+      // Common calendar names from user screenshot: Peter, Background, Family, Tasks, etc.
+      const commonCalendarNames = [
+        'peter', 'background', 'family', 'tasks', 'todoist', 'birthdays',
+        'work', 'personal', 'home', 'meetings', 'appointments'
+      ];
+      
+      for (const calName of commonCalendarNames) {
+        if (lowercaseText === calName) {
+          return calName;
+        }
+      }
+    }
+    
+    // Look for elements with calendar-related attributes
+    const calendarElements = popover.querySelectorAll('[data-calendar-id], [data-calendar], [data-cal-id]');
+    for (const element of calendarElements) {
+      const calendarId = element.getAttribute('data-calendar-id') || 
+                        element.getAttribute('data-calendar') || 
+                        element.getAttribute('data-cal-id');
+      if (calendarId) {
+        return calendarId;
+      }
+    }
+    
+    // Look for calendar info in aria-labels or title attributes
+    const elementsWithLabels = popover.querySelectorAll('[aria-label], [title]');
+    for (const element of elementsWithLabels) {
+      const ariaLabel = element.getAttribute('aria-label')?.toLowerCase();
+      const title = element.getAttribute('title')?.toLowerCase();
+      
+      if (ariaLabel && ariaLabel.includes('calendar')) {
+        // Extract calendar name from aria-label
+        const calendarMatch = ariaLabel.match(/calendar[:\s]+([a-zA-Z0-9\s]+)/i);
+        if (calendarMatch) {
+          return calendarMatch[1].trim();
+        }
+      }
+      
+      if (title && title.includes('calendar')) {
+        // Extract calendar name from title
+        const calendarMatch = title.match(/calendar[:\s]+([a-zA-Z0-9\s]+)/i);
+        if (calendarMatch) {
+          return calendarMatch[1].trim();
+        }
+      }
+    }
+    
+    return null;
+  }
+
   private async duplicateEventToTomorrow(eventDetails: EventDetails): Promise<void> {
     this.log('Starting event duplication process', eventDetails);
     
@@ -1094,8 +1256,10 @@ class GoogleCalendarTools implements CalendarExtension {
   }
 
   private async createEventViaGoogleCalendarAPI(eventDetails: EventDetails): Promise<void> {
-    // Try to use Google Calendar's internal authentication and APIs
-    const calendarId = this.extractCalendarId() || 'primary'; // Use current calendar or primary as fallback
+    // Use the extracted calendar ID from the original event, or fall back to guessing
+    const calendarId = eventDetails.calendarId || this.extractCalendarId() || 'primary';
+    
+    this.log('Using calendar ID for duplication:', calendarId);
     
     // Build the event payload
     const eventPayload = {
@@ -1112,7 +1276,7 @@ class GoogleCalendarTools implements CalendarExtension {
     
     if (accessToken) {
       // Use the Google Calendar API directly
-      const apiUrl = `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events`;
+      const apiUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
       
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -1324,6 +1488,11 @@ class GoogleCalendarTools implements CalendarExtension {
     const baseUrl = 'https://calendar.google.com/calendar/u/0/r/eventedit';
     const params = new URLSearchParams();
     
+    // Add calendar ID if available
+    if (eventDetails.calendarId) {
+      params.append('src', eventDetails.calendarId);
+    }
+    
     // Add title
     if (eventDetails.title) {
       params.append('text', eventDetails.title);
@@ -1448,6 +1617,11 @@ class GoogleCalendarTools implements CalendarExtension {
   private buildCalendarEventUrl(eventDetails: EventDetails): string {
     const baseUrl = 'https://calendar.google.com/calendar/u/0/r/eventedit';
     const params = new URLSearchParams();
+    
+    // Add calendar ID if available
+    if (eventDetails.calendarId) {
+      params.append('src', eventDetails.calendarId);
+    }
     
     // Add title
     if (eventDetails.title) {
