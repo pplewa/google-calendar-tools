@@ -1379,25 +1379,28 @@ class GoogleCalendarTools implements CalendarExtension {
       // Click the duplicate button
       duplicateButton.click();
       
-      // Wait for the duplicate creation dialog to appear - wait longer and check multiple times
+      // OPTIMIZED: Use faster, more efficient dialog detection
       let eventDialog = null;
-      for (let i = 0; i < 10; i++) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // First, try immediate detection (most dialogs appear instantly)
+      eventDialog = this.findEventDialog();
+      
+      if (!eventDialog) {
+        // If not found immediately, use optimized polling with shorter intervals
+        const maxAttempts = 20; // 20 attempts
+        const intervalMs = 100;  // 100ms intervals = max 2 seconds total
         
-        // Look for various dialog patterns
-        eventDialog = document.querySelector([
-          'div[role="dialog"]:has(input[aria-label*="Title"])',
-          'div[role="dialog"]:has(button[aria-label*="Save"])',
-          'div[role="dialog"]:has(input[value*="test"])',
-          'div[jscontroller]:has(input[aria-label*="Title"])',
-          '[data-is-touch-wrapper] div:has(input[aria-label*="Title"])',
-          'div[role="dialog"]'
-        ].join(', '));
-        
-        if (eventDialog) {
-          this.log(`Event dialog found after ${(i + 1) * 500}ms`);
-          break;
+        for (let i = 0; i < maxAttempts && !eventDialog; i++) {
+          await new Promise(resolve => setTimeout(resolve, intervalMs));
+          eventDialog = this.findEventDialog();
+          
+          if (eventDialog) {
+            this.log(`Event dialog found after ${(i + 1) * intervalMs}ms`);
+            break;
+          }
         }
+      } else {
+        this.log('Event dialog found immediately');
       }
       
       if (eventDialog) {
@@ -1436,6 +1439,46 @@ class GoogleCalendarTools implements CalendarExtension {
       this.error('Error in native duplicate operation', error as Error);
       return {created: false, dateAdjusted: false};
     }
+  }
+
+  // OPTIMIZED: Separate method for finding event dialog with comprehensive selectors
+  private findEventDialog(): Element | null {
+    // Look for various dialog patterns in order of specificity
+    const dialogSelectors = [
+      // Most specific: dialogs with title inputs (event creation/edit)
+      'div[role="dialog"]:has(input[aria-label*="Title"])',
+      'div[role="dialog"]:has(input[aria-label*="title"])',
+      'div[role="dialog"]:has(button[aria-label*="Save"])',
+      'div[role="dialog"]:has(button[aria-label*="save"])',
+      'div[role="dialog"]:has(input[value*="test"])',
+      
+      // Medium specificity: dialogs with controllers (Google Calendar patterns)
+      'div[jscontroller]:has(input[aria-label*="Title"])',
+      'div[jscontroller]:has(input[aria-label*="title"])',
+      '[data-is-touch-wrapper] div:has(input[aria-label*="Title"])',
+      '[data-is-touch-wrapper] div:has(input[aria-label*="title"])',
+      
+      // Lower specificity: any dialog (fallback)
+      'div[role="dialog"]'
+    ];
+    
+    for (const selector of dialogSelectors) {
+      try {
+        const dialog = document.querySelector(selector);
+        if (dialog) {
+          // Verify it's actually an event dialog by checking for typical event form elements
+          const hasEventElements = dialog.querySelector('input[aria-label*="title"], input[aria-label*="Title"], button[aria-label*="save"], button[aria-label*="Save"]');
+          if (hasEventElements) {
+            return dialog;
+          }
+        }
+      } catch (e) {
+        // Some selectors might fail in older browsers, continue to next
+        continue;
+      }
+    }
+    
+    return null;
   }
 
   private findDuplicateButton(popover: Element): HTMLElement | null {
@@ -1522,32 +1565,55 @@ class GoogleCalendarTools implements CalendarExtension {
             
             this.log(`Adjusting date from "${dateInput.value}" to "${targetDateStr}"`);
             
-            // Clear and set new value with proper event handling
+            // OPTIMIZED: Use instant date setting instead of slow typing
+            const originalValue = dateInput.value;
+            
+            // Focus the input
             dateInput.focus();
-            await new Promise(resolve => setTimeout(resolve, 100));
             
-            // Select all text and delete it
-            dateInput.select();
-            document.execCommand('delete');
-            
-            // Type the new date character by character to simulate real typing
-            for (const char of targetDateStr) {
-              dateInput.value += char;
-              dateInput.dispatchEvent(new Event('input', { bubbles: true }));
-              await new Promise(resolve => setTimeout(resolve, 50));
+            // Set the value directly using multiple approaches for maximum compatibility
+            const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+            if (descriptor && descriptor.set) {
+              descriptor.set.call(dateInput, targetDateStr);
+            } else {
+              dateInput.value = targetDateStr;
             }
             
-            // Trigger all necessary events
-            dateInput.dispatchEvent(new Event('change', { bubbles: true }));
-            dateInput.dispatchEvent(new Event('blur', { bubbles: true }));
-            dateInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+            // Trigger input events to simulate user interaction - all at once, no delays
+            const inputEvent = new Event('input', { bubbles: true, cancelable: true });
+            const changeEvent = new Event('change', { bubbles: true, cancelable: true });
+            const focusEvent = new Event('focus', { bubbles: true, cancelable: true });
+            const blurEvent = new Event('blur', { bubbles: true, cancelable: true });
+            
+            // Fire events in sequence without delays
+            dateInput.dispatchEvent(focusEvent);
+            dateInput.dispatchEvent(inputEvent);
+            dateInput.dispatchEvent(changeEvent);
+            
+            // Also trigger React-style events for modern Google Calendar
+            if ((dateInput as any)._valueTracker) {
+              (dateInput as any)._valueTracker.setValue(originalValue);
+            }
+            
+            // Trigger keyboard events that Google Calendar might be listening for
+            const keydownEvent = new KeyboardEvent('keydown', { 
+              key: 'Enter', 
+              bubbles: true, 
+              cancelable: true 
+            });
+            const keyupEvent = new KeyboardEvent('keyup', { 
+              key: 'Enter', 
+              bubbles: true, 
+              cancelable: true 
+            });
+            
+            dateInput.dispatchEvent(keydownEvent);
+            dateInput.dispatchEvent(keyupEvent);
+            dateInput.dispatchEvent(blurEvent);
             
             this.log(`Date input updated to: "${dateInput.value}"`);
             
-            // Wait for the change to be processed
-            await new Promise(resolve => setTimeout(resolve, 500));
-            
-            // Verify the change took effect
+            // Quick validation - no delay needed
             if (dateInput.value === targetDateStr) {
               this.log('Date successfully updated and verified');
               return true;
@@ -1614,16 +1680,15 @@ class GoogleCalendarTools implements CalendarExtension {
           
           this.log(`Clicking save button: "${button.textContent?.trim()}" (aria-label: "${button.getAttribute('aria-label')}")`);
           
-          // Scroll button into view and click
+          // OPTIMIZED: Use immediate click with faster verification
           button.scrollIntoView();
           button.focus();
           button.click();
           
-          // Wait for save to complete
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          // Fast verification using shorter intervals
+          const verifySuccess = await this.waitForDialogClose(dialog, 100, 30); // 100ms × 30 = 3 seconds max
           
-          // Check if dialog is closed (successful save)
-          if (!document.contains(dialog)) {
+          if (verifySuccess) {
             this.log('Dialog closed after clicking save - success');
             return true;
           } else {
@@ -1643,9 +1708,10 @@ class GoogleCalendarTools implements CalendarExtension {
       if (primaryButtons.length > 0) {
         this.log('Trying primary/blue button as save button');
         primaryButtons[0].click();
-        await new Promise(resolve => setTimeout(resolve, 2000));
         
-        if (!document.contains(dialog)) {
+        const verifySuccess = await this.waitForDialogClose(dialog, 100, 30);
+        
+        if (verifySuccess) {
           this.log('Dialog closed after clicking primary button - success');
           return true;
         }
@@ -1657,6 +1723,17 @@ class GoogleCalendarTools implements CalendarExtension {
       this.log('Could not save event in dialog', error);
       return false;
     }
+  }
+
+  // OPTIMIZED: Helper method for efficient dialog close verification
+  private async waitForDialogClose(dialog: Element, intervalMs: number, maxAttempts: number): Promise<boolean> {
+    for (let i = 0; i < maxAttempts; i++) {
+      if (!document.contains(dialog)) {
+        return true; // Dialog was closed
+      }
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+    return false; // Dialog still open after timeout
   }
 
   private async createEventInBackground(eventDetails: EventDetails, targetDate?: Date): Promise<void> {
