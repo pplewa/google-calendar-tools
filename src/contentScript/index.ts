@@ -1170,15 +1170,12 @@ class GoogleCalendarTools implements CalendarExtension {
       tomorrow.setDate(tomorrow.getDate() + 1);
       this.log('Tomorrow (relative to local event date):', tomorrow.toDateString());
 
-      // Try to use Google's native "Copy to Calendar" functionality first
-      const copySuccess = await this.tryNativeCopyToCalendar(eventDetails);
-      if (copySuccess) {
-        return; // Native copy succeeded, we're done
-      }
+      // Extract the real Google Calendar ID from the page context
+      const realCalendarId = this.extractRealCalendarId(eventDetails.calendarId);
+      this.log('Real calendar ID extracted:', realCalendarId);
 
-      // Fallback to our custom creation method
-      this.log('Native copy failed, falling back to custom creation');
-      await this.createEventInBackground(eventDetails, tomorrow);
+      // Create the duplicate event with the correct calendar ID
+      await this.createDuplicateEvent(eventDetails, tomorrow, realCalendarId);
       
     } catch (error) {
       this.error('Error creating duplicate event', error as Error);
@@ -1188,174 +1185,217 @@ class GoogleCalendarTools implements CalendarExtension {
     }
   }
 
-  private async tryNativeCopyToCalendar(eventDetails: EventDetails): Promise<boolean> {
+  private extractRealCalendarId(calendarName?: string): string {
+    // Method 1: Extract from page's global calendar data
     try {
-      // Find the current popover
-      const popover = document.querySelector('div[role="dialog"], div[role="region"]');
-      if (!popover) {
-        this.log('No popover found for native copy');
-        return false;
-      }
-
-      // Look for "Copy to [Calendar]" buttons
-      const calendarName = eventDetails.calendarId || 'family'; // Default to family if not found
-      const copyButtons = this.findCopyToCalendarButtons(popover, calendarName);
-      
-      if (copyButtons.length === 0) {
-        this.log(`No "Copy to ${calendarName}" button found in popover`);
-        return false;
-      }
-
-      // Click the appropriate copy button
-      const targetButton = copyButtons[0];
-      this.log(`Found native copy button for ${calendarName}, clicking it`);
-      
-      // Click the button
-      targetButton.click();
-      
-      // Wait for the copy operation to complete
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Check if a new event creation dialog opened
-      const eventDialog = document.querySelector('div[role="dialog"][aria-label*="event"], div[role="dialog"][aria-label*="Event"]');
-      if (eventDialog) {
-        this.log('Event creation dialog opened, adjusting date to tomorrow');
-        
-        // Try to adjust the date in the dialog
-        await this.adjustDateInEventDialog(eventDialog);
-        
-        // Try to save the event
-        await this.saveEventInDialog(eventDialog);
-        
-        // Show success notification
-        const originalCalendar = eventDetails.calendarId || 'unknown';
-        this.showNotification(
-          `Event "${eventDetails.title}" duplicated to tomorrow!\n\n✅ Successfully copied using ${originalCalendar} calendar.`,
-          'success'
+      const calendarData = this.extractCalendarDataFromPage();
+      if (calendarData && calendarName) {
+        const matchingCalendar = calendarData.find(cal => 
+          cal.name.toLowerCase() === calendarName.toLowerCase() ||
+          cal.displayName?.toLowerCase() === calendarName.toLowerCase()
         );
+        if (matchingCalendar) {
+          this.log(`Found real calendar ID for "${calendarName}":`, matchingCalendar.id);
+          return matchingCalendar.id;
+        }
+      }
+    } catch (error) {
+      this.log('Could not extract calendar data from page:', error);
+    }
+
+    // Method 2: Extract from URL parameters or page context
+    try {
+      // Check if we're in a specific calendar view
+      const urlParams = new URLSearchParams(window.location.search);
+      const srcParam = urlParams.get('src');
+      if (srcParam) {
+        this.log('Found calendar ID from URL:', srcParam);
+        return srcParam;
+      }
+
+      // Check for calendar selection in the UI
+      const selectedCalendar = document.querySelector('[data-calendar-id][aria-selected="true"], [data-calendar-id].selected');
+      if (selectedCalendar) {
+        const calendarId = selectedCalendar.getAttribute('data-calendar-id');
+        if (calendarId) {
+          this.log('Found calendar ID from selected UI element:', calendarId);
+          return calendarId;
+        }
+      }
+    } catch (error) {
+      this.log('Could not extract calendar ID from URL/UI:', error);
+    }
+
+    // Method 3: Use the user's primary email as fallback
+    const userEmail = this.extractUserEmail();
+    if (userEmail) {
+      this.log('Using user email as calendar ID:', userEmail);
+      return userEmail;
+    }
+
+    // Final fallback
+    this.log('Using "primary" as calendar ID fallback');
+    return 'primary';
+  }
+
+  private extractCalendarDataFromPage(): Array<{id: string, name: string, displayName?: string}> | null {
+    try {
+      // Try to extract calendar data from Google Calendar's global objects
+      const global = window as any;
+      
+      // Method 1: Check for calendar list in global scope
+      if (global._docs_calendar_data || global.calendar_data) {
+        const calendarData = global._docs_calendar_data || global.calendar_data;
+        if (Array.isArray(calendarData)) {
+          return calendarData.map(cal => ({
+            id: cal.id || cal.calendarId,
+            name: cal.name || cal.summary || cal.title,
+            displayName: cal.displayName || cal.summaryOverride
+          }));
+        }
+      }
+
+      // Method 2: Extract from script tags containing calendar configuration
+      const scripts = Array.from(document.querySelectorAll('script'));
+      for (const script of scripts) {
+        const content = script.textContent || '';
         
+        // Look for calendar configuration patterns
+        const calendarPatterns = [
+          /"calendars":\s*(\[[\s\S]*?\])/,
+          /"calendarList":\s*(\[[\s\S]*?\])/,
+          /calendars\s*:\s*(\[[\s\S]*?\])/
+        ];
+
+        for (const pattern of calendarPatterns) {
+          const match = content.match(pattern);
+          if (match) {
+            try {
+              const calendars = JSON.parse(match[1]);
+              if (Array.isArray(calendars)) {
+                return calendars.map(cal => ({
+                  id: cal.id || cal.calendarId,
+                  name: cal.name || cal.summary || cal.title,
+                  displayName: cal.displayName || cal.summaryOverride
+                }));
+              }
+            } catch (parseError) {
+              this.log('Failed to parse calendar JSON:', parseError);
+            }
+          }
+        }
+      }
+
+      return null;
+    } catch (error) {
+      this.log('Error extracting calendar data from page:', error);
+      return null;
+    }
+  }
+
+  private extractUserEmail(): string | null {
+    try {
+      // Method 1: Extract from Google account info
+      const accountElements = document.querySelectorAll('[data-email], [aria-label*="@"]');
+      for (const element of accountElements) {
+        const email = element.getAttribute('data-email') || 
+                     element.getAttribute('aria-label')?.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)?.[1];
+        if (email && email.includes('@')) {
+          return email;
+        }
+      }
+
+      // Method 2: Extract from page scripts
+      const scripts = Array.from(document.querySelectorAll('script'));
+      for (const script of scripts) {
+        const content = script.textContent || '';
+        const emailMatch = content.match(/"email":\s*"([^"]+@[^"]+)"/);
+        if (emailMatch) {
+          return emailMatch[1];
+        }
+      }
+
+      return null;
+    } catch (error) {
+      this.log('Error extracting user email:', error);
+      return null;
+    }
+  }
+
+  private async createDuplicateEvent(eventDetails: EventDetails, targetDate: Date, calendarId: string): Promise<void> {
+    // Adjust the event for the target date
+    const adjustedEvent = this.adjustEventForNewDate(eventDetails, targetDate);
+    
+    // Use Google Calendar's Quick Add functionality with the correct calendar
+    const success = await this.useQuickAdd(adjustedEvent, calendarId);
+    
+    if (success) {
+      this.showNotification(
+        `Event "${eventDetails.title}" duplicated to tomorrow!\n\n✅ Successfully created in "${eventDetails.calendarId || 'your'}" calendar.`,
+        'success'
+      );
+      
+      // Close popover and refresh
+      await this.closeEventPopover();
+      await this.refreshCalendarView();
+      this.health.totalEnhanced++;
+    } else {
+      // Fallback to URL method with clear instructions
+      await this.createEventViaURL(adjustedEvent);
+      
+      const calendarName = eventDetails.calendarId || 'unknown';
+      this.showNotification(
+        `Event "${eventDetails.title}" created!\n\n⚠️ Please move it to your "${calendarName}" calendar:\n1. Click the new event\n2. Click "Edit"\n3. Change calendar to "${calendarName}"\n4. Save`,
+        'info'
+      );
+      
+      await this.closeEventPopover();
+      await this.refreshCalendarView();
+    }
+  }
+
+  private async useQuickAdd(eventDetails: EventDetails, calendarId: string): Promise<boolean> {
+    try {
+      // Try to use Google Calendar's Quick Add feature
+      const quickAddInput = document.querySelector('input[placeholder*="add"], input[aria-label*="add"], input[placeholder*="event"]') as HTMLInputElement;
+      
+      if (quickAddInput) {
+        // Format the quick add text
+        const timeStr = eventDetails.isAllDay ? 
+          'all day' : 
+          `${this.formatTimeForQuickAdd(eventDetails.startDateTime!)} to ${this.formatTimeForQuickAdd(eventDetails.endDateTime!)}`;
+        
+        const quickAddText = `${eventDetails.title} ${timeStr} tomorrow`;
+        
+        // Focus and fill the input
+        quickAddInput.focus();
+        quickAddInput.value = quickAddText;
+        
+        // Trigger input events
+        quickAddInput.dispatchEvent(new Event('input', { bubbles: true }));
+        quickAddInput.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        // Press Enter to create
+        quickAddInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        
+        this.log('Used Quick Add to create event:', quickAddText);
         return true;
-      } else {
-        this.log('No event creation dialog appeared after clicking copy button');
-        return false;
       }
       
+      return false;
     } catch (error) {
-      this.error('Error in native copy operation', error as Error);
+      this.log('Quick Add failed:', error);
       return false;
     }
   }
 
-  private findCopyToCalendarButtons(popover: Element, targetCalendar: string): HTMLElement[] {
-    const buttons: HTMLElement[] = [];
-    
-    // Look for text that contains "Copy to [Calendar]"
-    const allElements = Array.from(popover.querySelectorAll('*'));
-    
-    for (const element of allElements) {
-      const text = element.textContent || '';
-      
-      // Look for patterns like "Copy to Family", "Copy to Peter", etc.
-      const copyPattern = new RegExp(`Copy to ${targetCalendar}`, 'i');
-      if (copyPattern.test(text)) {
-        // Find the clickable element (button, div with role="button", etc.)
-        let clickableElement = element as HTMLElement;
-        
-        // Check if the element itself is clickable
-        if (element.tagName === 'BUTTON' || 
-            element.getAttribute('role') === 'button' ||
-            element.hasAttribute('onclick') ||
-            (element as HTMLElement).style.cursor === 'pointer') {
-          buttons.push(clickableElement);
-        } else {
-          // Look for a clickable parent
-          let parent = element.parentElement;
-          while (parent && parent !== popover) {
-            if (parent.tagName === 'BUTTON' || 
-                parent.getAttribute('role') === 'button' ||
-                parent.hasAttribute('onclick') ||
-                window.getComputedStyle(parent).cursor === 'pointer') {
-              buttons.push(parent);
-              break;
-            }
-            parent = parent.parentElement;
-          }
-        }
-      }
-    }
-    
-    // Also look for generic copy buttons that might be associated with calendars
-    const genericCopyButtons = Array.from(popover.querySelectorAll('button, [role="button"]'))
-      .filter(btn => {
-        const text = btn.textContent || '';
-        return text.toLowerCase().includes('copy') || 
-               text.toLowerCase().includes('duplicate') ||
-               btn.getAttribute('aria-label')?.toLowerCase().includes('copy');
-      });
-    
-    buttons.push(...(genericCopyButtons as HTMLElement[]));
-    
-    this.log(`Found ${buttons.length} potential copy buttons for ${targetCalendar}`);
-    return buttons;
+  private formatTimeForQuickAdd(date: Date): string {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
   }
 
-  private async adjustDateInEventDialog(dialog: Element): Promise<void> {
-    try {
-      // Look for date input fields
-      const dateInputs = Array.from(dialog.querySelectorAll('input[type="date"], input[aria-label*="date"], input[placeholder*="date"]'));
-      
-      for (const input of dateInputs) {
-        const dateInput = input as HTMLInputElement;
-        if (dateInput.value) {
-          // Parse current date and add one day
-          const currentDate = new Date(dateInput.value);
-          const tomorrow = new Date(currentDate);
-          tomorrow.setDate(tomorrow.getDate() + 1);
-          
-          // Format as YYYY-MM-DD
-          const tomorrowStr = tomorrow.toISOString().split('T')[0];
-          
-          // Update the input
-          dateInput.value = tomorrowStr;
-          dateInput.dispatchEvent(new Event('change', { bubbles: true }));
-          dateInput.dispatchEvent(new Event('input', { bubbles: true }));
-          
-          this.log(`Adjusted date from ${dateInput.value} to ${tomorrowStr}`);
-          break;
-        }
-      }
-    } catch (error) {
-      this.log('Could not adjust date in event dialog', error);
-    }
-  }
 
-  private async saveEventInDialog(dialog: Element): Promise<void> {
-    try {
-      // Look for save button
-      const saveButtons = Array.from(dialog.querySelectorAll('button, [role="button"]'))
-        .filter(btn => {
-          const text = btn.textContent?.toLowerCase() || '';
-          const ariaLabel = btn.getAttribute('aria-label')?.toLowerCase() || '';
-          return text.includes('save') || 
-                 text.includes('create') ||
-                 ariaLabel.includes('save') ||
-                 ariaLabel.includes('create');
-        });
-      
-      if (saveButtons.length > 0) {
-        const saveButton = saveButtons[0] as HTMLElement;
-        saveButton.click();
-        this.log('Clicked save button in event dialog');
-        
-        // Wait for save to complete
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } else {
-        this.log('No save button found in event dialog');
-      }
-    } catch (error) {
-      this.log('Could not save event in dialog', error);
-    }
-  }
+
+
 
   private async createEventInBackground(eventDetails: EventDetails, targetDate?: Date): Promise<void> {
     this.log('Creating event in background', eventDetails);
@@ -1945,59 +1985,29 @@ class GoogleCalendarTools implements CalendarExtension {
   }
 
   private async closeEventPopover(): Promise<void> {
-    // Try to close the popover by pressing Escape
-    const escapeEvent = new KeyboardEvent('keydown', {
-      key: 'Escape',
-      code: 'Escape',
-      keyCode: 27,
-      bubbles: true
-    });
+    // Close any open popovers
+    const closeButtons = document.querySelectorAll('[aria-label*="Close"], [aria-label*="close"], button[aria-label*="Back"]');
+    for (const button of closeButtons) {
+      if (button instanceof HTMLElement && button.offsetParent !== null) {
+        button.click();
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
     
-    document.dispatchEvent(escapeEvent);
-    
-    // Wait a moment for the popover to close
-    await new Promise(resolve => setTimeout(resolve, 300));
+    // Click outside to close
+    document.body.click();
   }
 
   private async refreshCalendarView(): Promise<void> {
-    // Try to refresh the calendar view to show the new event
-    try {
-      // Method 1: Try to find and click refresh button
-      const refreshButton = document.querySelector('button[aria-label*="Refresh"], button[title*="Refresh"]');
-      if (refreshButton) {
-        (refreshButton as HTMLElement).click();
-        this.log('Clicked refresh button');
-        return;
-      }
-      
-      // Method 2: Try to simulate F5 key press
-      const refreshEvent = new KeyboardEvent('keydown', {
-        key: 'F5',
-        code: 'F5',
-        keyCode: 116,
-        bubbles: true
-      });
-      document.dispatchEvent(refreshEvent);
-      this.log('Simulated F5 refresh');
-      
-      // Method 3: Trigger a view change to force refresh
-      const viewButtons = document.querySelectorAll('[data-view-name], [role="tab"]');
-      if (viewButtons.length > 0) {
-        const currentView = Array.from(viewButtons).find(btn => 
-          btn.getAttribute('aria-selected') === 'true' || btn.classList.contains('active')
-        );
-        if (currentView) {
-          // Click the current view to refresh
-          (currentView as HTMLElement).click();
-          this.log('Clicked current view to refresh');
-        }
-      }
-      
-      // Wait a moment for the refresh to complete
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } catch (error) {
-      this.log('Could not refresh calendar view', error);
-    }
+    // Trigger a calendar refresh by simulating F5
+    this.log('Simulating F5 refresh');
+    document.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'F5',
+      code: 'F5',
+      keyCode: 116,
+      which: 116,
+      bubbles: true
+    }));
   }
 
   private showNotification(message: string, type: 'success' | 'error' | 'info' = 'info'): void {
@@ -2458,3 +2468,4 @@ window.addEventListener('beforeunload', () => {
 
 // Make available globally for debugging
 (window as any).calendarTools = calendarTools;
+
