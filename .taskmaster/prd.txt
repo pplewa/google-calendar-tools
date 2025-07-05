@@ -1,0 +1,141 @@
+Product Requirements Document (PRD): Google Calendar Productivity Extension
+Author: Gemini
+Date: July 5, 2025
+Version: 1.0
+
+1. Introduction & Vision
+This document outlines the requirements for a Chrome extension designed to enhance the functionality of Google Calendar. The primary goal is to provide users with powerful, time-saving tools for managing their calendar events more efficiently. By adding intuitive controls directly into the Google Calendar interface, this extension will streamline common but currently cumbersome tasks like duplicating events and adjusting event durations. Our vision is to make calendar management faster, more intuitive, and less repetitive for busy professionals.
+
+2. Goals & Objectives
+Primary Goal: Reduce the time and effort required to perform common event management tasks in Google Calendar.
+
+Objective 1: Implement a one-click feature to duplicate a single event to the following day.
+
+Objective 2: Enable users to copy all events from one day to any other selected day.
+
+Objective 3: Allow for the selective copying of multiple events to another day.
+
+Objective 4: Provide quick-action buttons to modify an event's duration and automatically fill available time slots.
+
+Objective 5: Ensure the extension integrates seamlessly with the existing Google Calendar UI without being intrusive.
+
+3. Target Audience
+Primary Users: Professionals, managers, and administrative staff who heavily rely on Google Calendar for daily scheduling and planning.
+
+Secondary Users: Students, freelancers, and anyone who frequently manages a dynamic schedule and performs repetitive tasks in Google Calendar.
+
+4. Features & Functionality
+4.1. Quick Duplicate Event to Tomorrow
+Description: A feature to instantly duplicate a single event to the same time on the following day.
+
+User Story: As a user, I want to be able to quickly copy an event to tomorrow without having to manually create a new event and copy all the details.
+
+UI/UX:
+
+An icon (e.g., a "duplicate" or "plus one day" icon) will appear on an event card when the user hovers over it.
+
+This icon will be placed alongside the existing "Edit" and "Delete" icons.
+
+Behavior:
+
+Clicking the "Duplicate to Tomorrow" icon will create an exact copy of the event on the next day at the same time.
+
+All event details (title, description, guests, location, etc.) will be duplicated.
+
+A subtle success notification (e.g., a toast message like "Event duplicated to tomorrow") should appear to confirm the action.
+
+4.2. Duplicate All Events from a Day
+Description: A feature to copy all events from a selected day to another specific day.
+
+User Story: As a user, I want to copy my entire schedule from today to next Monday to quickly set up my week.
+
+UI/UX:
+
+A new "Copy Day" icon will be added to the header of each day in the Week and Day views.
+
+Clicking this icon will initiate the "copy day" mode. The UI will then prompt the user to select a target day.
+
+The target day can be selected by clicking on the header of another day in the calendar view.
+
+Behavior:
+
+After the user selects a target day, all events from the source day are copied to the target day.
+
+The extension will handle overlapping events gracefully, though for V1, a simple overlap is acceptable.
+
+A confirmation modal will appear before finalizing the copy: "Are you sure you want to copy all events from [Source Date] to [Target Date]?".
+
+4.3. Select and Copy Multiple Events
+Description: Allows users to select multiple specific events from one or more days and copy them to a specified day.
+
+User Story: As a user, I want to select three important meetings from this week and copy them all to a specific day next week for a project launch.
+
+UI/UX:
+
+The extension will inject checkboxes onto each event card.
+
+A persistent "Copy Selected To..." button will appear in the main Google Calendar header (near the "Today" button) once at least one event is checked.
+
+Clicking this button will open a date picker, allowing the user to choose the target day.
+
+Behavior:
+
+Users can check the boxes on any events they wish to copy.
+
+Upon selecting a target date from the date picker and confirming, all selected events are duplicated to that date.
+
+The times of the events on the new day will remain the same as their original times.
+
+4.4. Quick Modify Event Duration
+Description: A set of controls to quickly adjust an event's duration.
+
+User Story: As a user, I want to quickly extend a meeting by 15 minutes or make it fill the entire gap before my next scheduled event.
+
+UI/UX:
+
+When a user clicks on an event to open the detail pop-over, the extension will add a new section titled "Quick Adjust."
+
+This section will contain buttons: +15m, +30m, +60m.
+
+An additional button, Fill Until Next, will also be present.
+
+Behavior:
+
+Clicking +15m, +30m, or +60m will add the corresponding amount of time to the event's end time. The button should be disabled if adding the time would cause an overlap with the next event.
+
+Clicking Fill Until Next will automatically adjust the event's end time to match the start time of the very next event on that day.
+
+If there is no next event on the same day, the Fill Until Next button will be disabled or hidden.
+
+All changes are saved instantly without requiring the user to click the main "Save" button.
+
+5. Technical Considerations
+Platform: Chrome Extension.
+
+Technology Stack: The project will be built using the provided scaffold, which utilizes TypeScript, ensuring type safety and better code maintainability.
+
+Integration: The extension will interact with the Google Calendar web app's DOM. It must be resilient to potential changes in Google's HTML structure. A robust method for selecting and manipulating DOM elements is required.
+
+Permissions: The extension will require permissions to access and modify the content of calendar.google.com.
+
+Build Tools: All necessary build tools are provided in the project scaffold.
+
+6. Success Metrics
+Adoption Rate: Number of active weekly users after launch.
+
+Feature Usage: Analytics on which of the new features are used most frequently.
+
+User Feedback: Positive reviews and feedback from the Chrome Web Store and other channels.
+
+Performance: The extension should have a minimal impact on the browser's performance and the loading speed of Google Calendar.
+
+7. Future Considerations (Post-V1)
+Cross-day "Fill Until Next": Allow the Fill Until Next feature to work across midnight.
+
+Recurring Events: Add special handling for duplicating or modifying instances of a recurring event series.
+
+Customizable Durations: Allow users to define their own quick-add duration presets (e.g., +5m, +45m).
+
+Firefox Support: Port the extension to be compatible with Firefox.
+
+Undo Functionality: An "undo" button to revert the last action taken by the extension.

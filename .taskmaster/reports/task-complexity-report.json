@@ -1,0 +1,93 @@
+{
+	"meta": {
+		"generatedAt": "2025-07-05T07:57:34.855Z",
+		"tasksAnalyzed": 10,
+		"totalTasks": 10,
+		"analysisCount": 10,
+		"thresholdScore": 5,
+		"projectName": "Taskmaster",
+		"usedResearch": true
+	},
+	"complexityAnalysis": [
+		{
+			"taskId": 1,
+			"taskTitle": "Setup Project Repository and Scaffold",
+			"complexityScore": 3,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break down the setup process into: (1) Creating the repository, (2) Installing dependencies, (3) Setting up manifest.json, (4) Verifying extension loads in Chrome.",
+			"reasoning": "This is a foundational setup task involving standard steps for initializing a Chrome extension project. It requires basic knowledge of tools and configuration files, but does not involve complex logic or problem-solving. The process is well-documented and follows a predictable sequence.[1][3]"
+		},
+		{
+			"taskId": 2,
+			"taskTitle": "Implement Core DOM Injection and Event Detection",
+			"complexityScore": 7,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Expand into: (1) Writing the content script, (2) Injecting UI elements, (3) Implementing MutationObserver logic, (4) Ensuring resilience to DOM changes, (5) Testing on Google Calendar.",
+			"reasoning": "Injecting UI into a dynamic web app like Google Calendar and ensuring resilience to frequent DOM changes is moderately complex. It requires understanding of content scripts, DOM APIs, and robust error handling to avoid breaking with upstream updates.[5]"
+		},
+		{
+			"taskId": 3,
+			"taskTitle": "Develop Quick Duplicate Event to Tomorrow Feature",
+			"complexityScore": 6,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Divide into: (1) Adding the duplicate icon, (2) Handling click events, (3) Cloning event data, (4) Creating the new event for tomorrow, (5) Displaying toast notifications.",
+			"reasoning": "This task involves UI injection, event handling, data manipulation, and inter-script communication. While not highly complex, it requires careful coordination between UI and background logic."
+		},
+		{
+			"taskId": 4,
+			"taskTitle": "Implement Copy All Events from a Day Feature",
+			"complexityScore": 7,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Expand into: (1) Adding 'Copy Day' icon, (2) Prompting for target day, (3) Collecting all events from source day, (4) Handling overlaps, (5) Copying events, (6) Showing confirmation modal.",
+			"reasoning": "Copying multiple events with overlap handling and user prompts adds complexity, especially in managing edge cases and ensuring a smooth user experience."
+		},
+		{
+			"taskId": 5,
+			"taskTitle": "Develop Select and Copy Multiple Events Feature",
+			"complexityScore": 7,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Break down into: (1) Injecting checkboxes, (2) Managing selection state, (3) Adding 'Copy Selected To...' button, (4) Implementing date picker, (5) Copying selected events, (6) Testing with date-fns.",
+			"reasoning": "Requires dynamic UI updates, state management, and batch operations, which increases complexity compared to single-event actions."
+		},
+		{
+			"taskId": 6,
+			"taskTitle": "Implement Quick Modify Event Duration Controls",
+			"complexityScore": 6,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Expand into: (1) Injecting 'Quick Adjust' section, (2) Adding duration buttons, (3) Adjusting event end time, (4) Disabling buttons on overlap, (5) Saving changes instantly.",
+			"reasoning": "Involves UI injection, time calculations, and real-time validation for overlaps, requiring careful logic but not highly advanced algorithms."
+		},
+		{
+			"taskId": 7,
+			"taskTitle": "Integrate Seamless UI/UX with Google Calendar",
+			"complexityScore": 5,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Divide into: (1) Styling custom elements, (2) Matching Material Design guidelines, (3) Ensuring icon/button intuitiveness, (4) User experience testing.",
+			"reasoning": "Styling and UX integration are important but not algorithmically complex; the main challenge is attention to detail and consistency with an existing design system."
+		},
+		{
+			"taskId": 8,
+			"taskTitle": "Implement Analytics and Performance Monitoring",
+			"complexityScore": 5,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Expand into: (1) Integrating analytics library, (2) Tracking feature usage, (3) Monitoring performance with Chrome APIs, (4) Validating data collection.",
+			"reasoning": "Integrating analytics and performance monitoring is straightforward with existing tools, but requires careful handling of privacy and minimal performance impact."
+		},
+		{
+			"taskId": 9,
+			"taskTitle": "Develop Robust Error Handling and Resilience",
+			"complexityScore": 7,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Break down into: (1) Implementing error boundaries, (2) Adding fallback mechanisms, (3) Adapting to DOM changes, (4) Logging errors, (5) Testing recovery scenarios.",
+			"reasoning": "Ensuring resilience to unpredictable DOM changes and robust error handling is moderately complex, requiring defensive programming and thorough testing."
+		},
+		{
+			"taskId": 10,
+			"taskTitle": "Prepare for Chrome Web Store Submission",
+			"complexityScore": 6,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Expand into: (1) Creating production build, (2) Writing user documentation, (3) Drafting privacy policy, (4) Preparing screenshots, (5) Creating promotional materials, (6) Testing in clean Chrome profile.",
+			"reasoning": "Submission involves multiple deliverables (code, documentation, assets) and compliance checks, making it more involved than a simple packaging task."
+		}
+	]
+}
