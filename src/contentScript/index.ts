@@ -368,17 +368,17 @@ class GoogleCalendarTools implements CalendarExtension {
         padding: 0;
         font-size: 10px;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-        pointer-events: none;
+        pointer-events: auto;
       }
       
       .gct-duplicate-btn.show {
         opacity: 1;
-        pointer-events: auto;
       }
       
       .gct-duplicate-btn:hover {
         background: rgba(255, 255, 255, 1);
         transform: scale(1.1);
+        opacity: 1 !important;
       }
       
       .gct-duplicate-btn:hover {
@@ -505,23 +505,56 @@ class GoogleCalendarTools implements CalendarExtension {
       // Simply append to the event card - much more reliable
       cardElement.appendChild(button);
       
-      // Add hover listeners to show/hide button without affecting parent layout
-      cardElement.addEventListener('mouseenter', () => {
-        button.classList.add('show');
-      });
+      // Enhanced hover logic to prevent button from disappearing during click
+      let hideTimeout: NodeJS.Timeout | null = null;
       
-      cardElement.addEventListener('mouseleave', () => {
-        button.classList.remove('show');
-      });
+      const showButton = () => {
+        if (hideTimeout) {
+          clearTimeout(hideTimeout);
+          hideTimeout = null;
+        }
+        button.classList.add('show');
+      };
+      
+      const hideButton = () => {
+        // Small delay to allow mouse to move to button
+        hideTimeout = setTimeout(() => {
+          button.classList.remove('show');
+        }, 100);
+      };
+      
+      // Event card hover
+      cardElement.addEventListener('mouseenter', showButton);
+      cardElement.addEventListener('mouseleave', hideButton);
+      
+      // Button hover - keep visible when hovering button itself
+      button.addEventListener('mouseenter', showButton);
+      button.addEventListener('mouseleave', hideButton);
 
-      // Add event listener
+      // Enhanced click handling to prevent propagation issues
       button.addEventListener('click', (e) => {
-        e.stopPropagation(); // Prevent triggering the event click
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        // Ensure button stays visible during the operation
+        button.classList.add('show');
+        
         this.handleEventDuplicate(eventId);
       });
+      
+      // Prevent any other mouse events from bubbling
+      button.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+      });
+      
+      button.addEventListener('mouseup', (e) => {
+        e.stopPropagation();
+      });
 
-      // Store button reference for cleanup
+      // Store button reference and timeout for cleanup
       button.setAttribute('data-event-id', eventId);
+      (button as any)._hideTimeout = hideTimeout;
       
       this.log(`✅ Button successfully injected for event: ${eventId}`);
       
@@ -2865,9 +2898,12 @@ class GoogleCalendarTools implements CalendarExtension {
         if (eventCard.lastSeen < staleThreshold || !document.contains(eventCard.element)) {
           this.eventCards.delete(eventId);
           
-          // Remove associated button
-          const orphanedButton = document.querySelector(`.gct-duplicate-btn[data-event-id="${eventId}"]`);
+          // Remove associated button and clear timeout
+          const orphanedButton = document.querySelector(`.gct-duplicate-btn[data-event-id="${eventId}"]`) as any;
           if (orphanedButton) {
+            if (orphanedButton._hideTimeout) {
+              clearTimeout(orphanedButton._hideTimeout);
+            }
             orphanedButton.remove();
           }
           
@@ -2918,9 +2954,12 @@ class GoogleCalendarTools implements CalendarExtension {
       this.health.failedEnhancements = 0;
       this.health.isHealthy = true;
       
-      // Clean up orphaned buttons
-      const orphanedButtons = document.querySelectorAll('.gct-duplicate-btn');
+      // Clean up orphaned buttons and timeouts
+      const orphanedButtons = document.querySelectorAll('.gct-duplicate-btn') as NodeListOf<any>;
       orphanedButtons.forEach(button => {
+        if (button._hideTimeout) {
+          clearTimeout(button._hideTimeout);
+        }
         button.remove();
       });
       if (orphanedButtons.length > 0) {
@@ -2964,9 +3003,12 @@ class GoogleCalendarTools implements CalendarExtension {
       this.observer = null;
     }
     
-    // Remove all injected buttons
-    const allButtons = document.querySelectorAll('.gct-duplicate-btn');
+    // Remove all injected buttons and clear timeouts
+    const allButtons = document.querySelectorAll('.gct-duplicate-btn') as NodeListOf<any>;
     allButtons.forEach(button => {
+      if (button._hideTimeout) {
+        clearTimeout(button._hideTimeout);
+      }
       button.remove();
     });
     this.log(`Removed ${allButtons.length} duplicate buttons`);
