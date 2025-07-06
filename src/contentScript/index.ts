@@ -369,7 +369,7 @@ class GoogleCalendarTools implements CalendarExtension {
         pointer-events: none;
       }
       
-      .gct-enhanced-event:hover .gct-duplicate-btn {
+      .gct-duplicate-btn.visible {
         opacity: 1;
         pointer-events: auto;
       }
@@ -510,13 +510,14 @@ class GoogleCalendarTools implements CalendarExtension {
         button.style.top = `${rect.top + 3}px`;
       };
 
-      // Add hover listeners to card element
+      // Add hover listeners to card element for visibility and positioning
       cardElement.addEventListener('mouseenter', () => {
         updateButtonPosition();
+        button.classList.add('visible');
       });
 
       cardElement.addEventListener('mouseleave', () => {
-        // Button will fade out via CSS
+        button.classList.remove('visible');
       });
 
       // Update position on scroll
