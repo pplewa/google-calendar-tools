@@ -301,8 +301,8 @@ class GoogleCalendarTools implements CalendarExtension {
       return;
     }
 
-    // Check if already enhanced AND has the button
-    const existingButton = cardElement.querySelector('.gct-duplicate-btn');
+    // Check if already enhanced AND has the button (buttons are now in document body)
+    const existingButton = document.querySelector(`.gct-duplicate-btn[data-event-id="${eventId}"]`);
     if (this.eventCards.has(eventId) && existingButton) {
       // Update last seen timestamp and we're done
       const existingCard = this.eventCards.get(eventId)!;
@@ -349,20 +349,14 @@ class GoogleCalendarTools implements CalendarExtension {
     style.id = styleId;
     style.textContent = `
       /* Google Calendar Tools Custom Styles */
-      .gct-enhanced-event {
-        position: relative !important;
-      }
-      
       .gct-duplicate-btn {
-        position: absolute;
-        top: 2px;
-        right: 2px;
+        position: fixed;
         background: rgba(255, 255, 255, 0.9);
         border: 1px solid rgba(0, 0, 0, 0.1);
         cursor: pointer;
         opacity: 0;
         transition: opacity 0.2s ease, background-color 0.2s ease;
-        z-index: 100;
+        z-index: 1000;
         border-radius: 50%;
         width: 20px;
         height: 20px;
@@ -372,6 +366,12 @@ class GoogleCalendarTools implements CalendarExtension {
         padding: 0;
         font-size: 12px;
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        pointer-events: none;
+      }
+      
+      .gct-enhanced-event:hover .gct-duplicate-btn {
+        opacity: 1;
+        pointer-events: auto;
       }
       
       .gct-duplicate-btn:hover {
@@ -484,8 +484,8 @@ class GoogleCalendarTools implements CalendarExtension {
 
 
   private injectDuplicateButton(cardElement: HTMLElement, eventId: string): void {
-    // Check if button already exists
-    const existingButton = cardElement.querySelector('.gct-duplicate-btn');
+    // Check if button already exists (buttons are now in document body)
+    const existingButton = document.querySelector(`.gct-duplicate-btn[data-event-id="${eventId}"]`);
     if (existingButton) {
       this.log(`Button already exists for event: ${eventId}`);
       return;
@@ -500,12 +500,27 @@ class GoogleCalendarTools implements CalendarExtension {
       button.title = 'Duplicate event to tomorrow';
       button.innerHTML = '📋';
 
-      // Insert at the beginning to appear at top-right, avoiding bottom overlap
-      if (cardElement.firstChild) {
-        cardElement.insertBefore(button, cardElement.firstChild);
-      } else {
-        cardElement.appendChild(button);
-      }
+      // Append to document body for fixed positioning
+      document.body.appendChild(button);
+
+      // Position button dynamically on hover
+      const updateButtonPosition = () => {
+        const rect = cardElement.getBoundingClientRect();
+        button.style.left = `${rect.right - 25}px`;
+        button.style.top = `${rect.top + 3}px`;
+      };
+
+      // Add hover listeners to card element
+      cardElement.addEventListener('mouseenter', () => {
+        updateButtonPosition();
+      });
+
+      cardElement.addEventListener('mouseleave', () => {
+        // Button will fade out via CSS
+      });
+
+      // Update position on scroll
+      window.addEventListener('scroll', updateButtonPosition, { passive: true });
 
       // Add event listener
       button.addEventListener('click', (e) => {
@@ -513,13 +528,10 @@ class GoogleCalendarTools implements CalendarExtension {
         this.handleEventDuplicate(eventId);
       });
 
-      // Verify injection succeeded
-      const verifyButton = cardElement.querySelector('.gct-duplicate-btn');
-      if (verifyButton) {
-        this.log(`✅ Button successfully injected for event: ${eventId}`);
-      } else {
-        this.error(`❌ Button injection failed for event: ${eventId} - not found after injection`);
-      }
+      // Store button reference for cleanup
+      button.setAttribute('data-event-id', eventId);
+      
+      this.log(`✅ Button successfully injected for event: ${eventId}`);
       
     } catch (error) {
       this.error(`Failed to inject button for event ${eventId}`, error as Error);
@@ -2856,10 +2868,17 @@ class GoogleCalendarTools implements CalendarExtension {
       
       this.log(`Starting health check... Current events: ${this.eventCards.size}`);
       
-      // Check for stale event cards
+      // Check for stale event cards and clean up orphaned buttons
       this.eventCards.forEach((eventCard, eventId) => {
         if (eventCard.lastSeen < staleThreshold || !document.contains(eventCard.element)) {
           this.eventCards.delete(eventId);
+          
+          // Remove associated button
+          const orphanedButton = document.querySelector(`.gct-duplicate-btn[data-event-id="${eventId}"]`);
+          if (orphanedButton) {
+            orphanedButton.remove();
+          }
+          
           staleEvents++;
         }
       });
@@ -2907,6 +2926,13 @@ class GoogleCalendarTools implements CalendarExtension {
       this.health.failedEnhancements = 0;
       this.health.isHealthy = true;
       
+      // Clean up orphaned buttons
+      const orphanedButtons = document.querySelectorAll('.gct-duplicate-btn');
+      orphanedButtons.forEach(button => button.remove());
+      if (orphanedButtons.length > 0) {
+        this.log(`Recovery: Removed ${orphanedButtons.length} orphaned buttons`);
+      }
+      
       // Clear potentially corrupted state
       this.eventCards.clear();
       
@@ -2943,6 +2969,11 @@ class GoogleCalendarTools implements CalendarExtension {
       this.observer.disconnect();
       this.observer = null;
     }
+    
+    // Remove all injected buttons from document body
+    const allButtons = document.querySelectorAll('.gct-duplicate-btn');
+    allButtons.forEach(button => button.remove());
+    this.log(`Removed ${allButtons.length} duplicate buttons`);
     
     // Remove custom styles
     const styleElement = document.getElementById('gct-styles');
