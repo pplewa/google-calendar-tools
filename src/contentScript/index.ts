@@ -349,34 +349,38 @@ class GoogleCalendarTools implements CalendarExtension {
     style.id = styleId;
     style.textContent = `
       /* Google Calendar Tools Custom Styles */
+      .gct-enhanced-event {
+        position: relative;
+      }
+      
       .gct-duplicate-btn {
-        position: fixed;
-        background: rgba(255, 255, 255, 0.9);
-        border: 1px solid rgba(0, 0, 0, 0.1);
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid rgba(0, 0, 0, 0.2);
         cursor: pointer;
         opacity: 0;
-        transition: opacity 0.2s ease, background-color 0.2s ease;
-        z-index: 1000;
-        border-radius: 50%;
-        width: 20px;
-        height: 20px;
+        transition: opacity 0.2s ease;
+        z-index: 100;
+        border-radius: 3px;
+        width: 18px;
+        height: 18px;
         display: flex;
         align-items: center;
         justify-content: center;
         padding: 0;
-        font-size: 12px;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-        pointer-events: none;
+        font-size: 10px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
       }
       
-      .gct-duplicate-btn.visible {
+      .gct-enhanced-event:hover .gct-duplicate-btn {
         opacity: 1;
-        pointer-events: auto;
       }
       
       .gct-duplicate-btn:hover {
         background: rgba(255, 255, 255, 1);
-        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+        transform: scale(1.1);
       }
       
       .gct-duplicate-btn:hover {
@@ -500,85 +504,11 @@ class GoogleCalendarTools implements CalendarExtension {
       button.title = 'Duplicate event to tomorrow';
       button.innerHTML = '📋';
 
-      // Append to document body for fixed positioning
-      document.body.appendChild(button);
-
-      // Enhanced positioning for stacked events
-      const updateButtonPosition = () => {
-        try {
-          // Get the bounding rect of the event card
-          const rect = cardElement.getBoundingClientRect();
-          
-          // Check if this event might be stacked (has siblings with similar positions)
-          const siblings = cardElement.parentElement?.children;
-          let topMostRect = rect;
-          
-          if (siblings) {
-            // Find the topmost visible event in the stack
-            for (const sibling of Array.from(siblings)) {
-              if (sibling instanceof HTMLElement && 
-                  sibling !== cardElement && 
-                  sibling.hasAttribute('data-eventid')) {
-                const siblingRect = sibling.getBoundingClientRect();
-                
-                // Check if this sibling overlaps horizontally and is above us
-                const horizontalOverlap = !(siblingRect.right < rect.left || siblingRect.left > rect.right);
-                const isAbove = siblingRect.top < topMostRect.top;
-                
-                if (horizontalOverlap && isAbove && siblingRect.height > 10) {
-                  topMostRect = siblingRect;
-                }
-              }
-            }
-          }
-          
-          // Position button at the top-right of the topmost visible event
-          button.style.left = `${topMostRect.right - 25}px`;
-          button.style.top = `${topMostRect.top + 3}px`;
-          
-        } catch (error) {
-          // Fallback to simple positioning
-          const rect = cardElement.getBoundingClientRect();
-          button.style.left = `${rect.right - 25}px`;
-          button.style.top = `${rect.top + 3}px`;
-        }
-      };
-
-      // Enhanced hover logic to keep button clickable
-      let hideTimeout: NodeJS.Timeout | null = null;
+      // Simply append to the event card - much more reliable
+      cardElement.appendChild(button);
       
-      const showButton = () => {
-        if (hideTimeout) {
-          clearTimeout(hideTimeout);
-          hideTimeout = null;
-        }
-        updateButtonPosition();
-        button.classList.add('visible');
-      };
-      
-      const hideButton = () => {
-        // Delay hiding to allow moving mouse to button and clicking
-        hideTimeout = setTimeout(() => {
-          button.classList.remove('visible');
-        }, 200);
-      };
-      
-      // Card hover events
-      cardElement.addEventListener('mouseenter', showButton);
-      cardElement.addEventListener('mouseleave', hideButton);
-      
-      // Button hover events to keep it visible when hovering button itself
-      button.addEventListener('mouseenter', () => {
-        if (hideTimeout) {
-          clearTimeout(hideTimeout);
-          hideTimeout = null;
-        }
-      });
-      
-      button.addEventListener('mouseleave', hideButton);
-
-      // Update position on scroll
-      window.addEventListener('scroll', updateButtonPosition, { passive: true });
+      // Add enhanced class for CSS targeting
+      cardElement.classList.add('gct-enhanced-event');
 
       // Add event listener
       button.addEventListener('click', (e) => {
@@ -586,11 +516,8 @@ class GoogleCalendarTools implements CalendarExtension {
         this.handleEventDuplicate(eventId);
       });
 
-      // Store button reference and timeout for cleanup
+      // Store button reference for cleanup
       button.setAttribute('data-event-id', eventId);
-      
-      // Store timeout reference on button for cleanup
-      (button as any)._hideTimeout = hideTimeout;
       
       this.log(`✅ Button successfully injected for event: ${eventId}`);
       
@@ -2934,13 +2861,9 @@ class GoogleCalendarTools implements CalendarExtension {
         if (eventCard.lastSeen < staleThreshold || !document.contains(eventCard.element)) {
           this.eventCards.delete(eventId);
           
-          // Remove associated button and clear any pending timeouts
-          const orphanedButton = document.querySelector(`.gct-duplicate-btn[data-event-id="${eventId}"]`) as any;
+          // Remove associated button
+          const orphanedButton = document.querySelector(`.gct-duplicate-btn[data-event-id="${eventId}"]`);
           if (orphanedButton) {
-            // Clear timeout to prevent memory leaks
-            if (orphanedButton._hideTimeout) {
-              clearTimeout(orphanedButton._hideTimeout);
-            }
             orphanedButton.remove();
           }
           
@@ -2991,13 +2914,9 @@ class GoogleCalendarTools implements CalendarExtension {
       this.health.failedEnhancements = 0;
       this.health.isHealthy = true;
       
-      // Clean up orphaned buttons and clear timeouts
-      const orphanedButtons = document.querySelectorAll('.gct-duplicate-btn') as NodeListOf<any>;
+      // Clean up orphaned buttons
+      const orphanedButtons = document.querySelectorAll('.gct-duplicate-btn');
       orphanedButtons.forEach(button => {
-        // Clear any pending timeouts
-        if (button._hideTimeout) {
-          clearTimeout(button._hideTimeout);
-        }
         button.remove();
       });
       if (orphanedButtons.length > 0) {
@@ -3041,13 +2960,9 @@ class GoogleCalendarTools implements CalendarExtension {
       this.observer = null;
     }
     
-    // Remove all injected buttons from document body and clear timeouts
-    const allButtons = document.querySelectorAll('.gct-duplicate-btn') as NodeListOf<any>;
+    // Remove all injected buttons
+    const allButtons = document.querySelectorAll('.gct-duplicate-btn');
     allButtons.forEach(button => {
-      // Clear any pending timeouts to prevent memory leaks
-      if (button._hideTimeout) {
-        clearTimeout(button._hideTimeout);
-      }
       button.remove();
     });
     this.log(`Removed ${allButtons.length} duplicate buttons`);
