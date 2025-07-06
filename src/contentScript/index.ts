@@ -504,8 +504,11 @@ class GoogleCalendarTools implements CalendarExtension {
       // Simply append to the event card - much more reliable
       cardElement.appendChild(button);
       
-      // Enhanced hover logic to prevent button from disappearing during click
+      // Simplified, more reliable hover logic with click debouncing
       let hideTimeout: NodeJS.Timeout | null = null;
+      let isClicking = false;
+      let lastClickTime = 0;
+      const CLICK_DEBOUNCE_MS = 500;
       
       const showButton = () => {
         if (hideTimeout) {
@@ -516,10 +519,15 @@ class GoogleCalendarTools implements CalendarExtension {
       };
       
       const hideButton = () => {
-        // Small delay to allow mouse to move to button
+        // Don't hide if currently clicking
+        if (isClicking) return;
+        
+        // Longer delay to prevent interference with clicking
         hideTimeout = setTimeout(() => {
-          button.classList.remove('show');
-        }, 100);
+          if (!isClicking) {
+            button.classList.remove('show');
+          }
+        }, 300);
       };
       
       // Event card hover
@@ -527,33 +535,94 @@ class GoogleCalendarTools implements CalendarExtension {
       cardElement.addEventListener('mouseleave', hideButton);
       
       // Button hover - keep visible when hovering button itself
-      button.addEventListener('mouseenter', showButton);
+      button.addEventListener('mouseenter', () => {
+        showButton();
+        isClicking = false; // Reset click state on hover
+      });
       button.addEventListener('mouseleave', hideButton);
 
-      // Enhanced click handling to prevent propagation issues
+      // More robust click handling
+      button.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        isClicking = true;
+        
+        this.log(`Mousedown on button for event: ${eventId}`);
+        
+        // Clear any hide timeout
+        if (hideTimeout) {
+          clearTimeout(hideTimeout);
+          hideTimeout = null;
+        }
+        
+        // Ensure button stays visible and provide visual feedback
+        button.classList.add('show');
+        button.style.transform = 'scale(0.95)';
+      });
+      
+      button.addEventListener('mouseup', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        this.log(`Mouseup on button for event: ${eventId}`);
+        
+        // Reset visual feedback
+        button.style.transform = 'scale(1.1)';
+      });
+      
       button.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
         
-        // Ensure button stays visible during the operation
-        button.classList.add('show');
+        const currentTime = Date.now();
+        this.log(`Click event received for event: ${eventId}, isClicking: ${isClicking}, timeSinceLastClick: ${currentTime - lastClickTime}ms`);
         
-        this.handleEventDuplicate(eventId);
-      });
-      
-      // Prevent any other mouse events from bubbling
-      button.addEventListener('mousedown', (e) => {
-        e.stopPropagation();
-      });
-      
-      button.addEventListener('mouseup', (e) => {
-        e.stopPropagation();
+        // Debounce rapid clicks
+        if (currentTime - lastClickTime < CLICK_DEBOUNCE_MS) {
+          this.log(`❌ Click ignored - too soon after last click (${currentTime - lastClickTime}ms < ${CLICK_DEBOUNCE_MS}ms)`);
+          return;
+        }
+        
+        // Only process if we're in a clicking state
+        if (!isClicking) {
+          this.log(`❌ Click ignored - not in clicking state for event: ${eventId}`);
+          return;
+        }
+        
+        lastClickTime = currentTime;
+        this.log(`✅ Processing valid click for event: ${eventId}`);
+        
+        // Provide immediate visual feedback
+        button.style.background = 'rgba(76, 175, 80, 0.9)';
+        button.innerHTML = '⏳';
+        
+        // Reset clicking state after a delay to prevent double-clicks
+        setTimeout(() => {
+          isClicking = false;
+          this.log(`Reset isClicking state for event: ${eventId}`);
+        }, 2000); // Increased to 2 seconds to give duplication time to complete
+        
+        // Execute duplication
+        this.handleEventDuplicate(eventId).finally(() => {
+          // Reset button appearance after duplication (success or failure)
+          setTimeout(() => {
+            if (button.parentElement) {
+              button.style.background = '';
+              button.innerHTML = '📋';
+              button.style.transform = '';
+            }
+          }, 1000); // Reduced to 1 second since duplication is already complete
+        });
       });
 
-      // Store button reference and timeout for cleanup
+      // Store button reference and state for cleanup
       button.setAttribute('data-event-id', eventId);
       (button as any)._hideTimeout = hideTimeout;
+      (button as any)._isClicking = isClicking;
+      (button as any)._lastClickTime = lastClickTime;
       
       this.log(`✅ Button successfully injected for event: ${eventId}`);
       
