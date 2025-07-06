@@ -349,23 +349,34 @@ class GoogleCalendarTools implements CalendarExtension {
     style.id = styleId;
     style.textContent = `
       /* Google Calendar Tools Custom Styles */
+      .gct-enhanced-event {
+        position: relative !important;
+      }
+      
       .gct-duplicate-btn {
-        float: right;
-        background: none;
-        border: none;
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(0, 0, 0, 0.1);
         cursor: pointer;
         opacity: 0;
         transition: opacity 0.2s ease, background-color 0.2s ease;
-        z-index: 10;
+        z-index: 100;
         border-radius: 50%;
         width: 20px;
         height: 20px;
-        display: inline-flex;
+        display: flex;
         align-items: center;
         justify-content: center;
         padding: 0;
-        margin: 2px;
         font-size: 12px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+      }
+      
+      .gct-duplicate-btn:hover {
+        background: rgba(255, 255, 255, 1);
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
       }
       
       .gct-duplicate-btn:hover {
@@ -489,10 +500,12 @@ class GoogleCalendarTools implements CalendarExtension {
       button.title = 'Duplicate event to tomorrow';
       button.innerHTML = '📋';
 
-      // Don't modify parent positioning to avoid layout disruption
-
-      // Append to the card
-      cardElement.appendChild(button);
+      // Insert at the beginning to appear at top-right, avoiding bottom overlap
+      if (cardElement.firstChild) {
+        cardElement.insertBefore(button, cardElement.firstChild);
+      } else {
+        cardElement.appendChild(button);
+      }
 
       // Add event listener
       button.addEventListener('click', (e) => {
