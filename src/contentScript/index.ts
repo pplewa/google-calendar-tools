@@ -254,38 +254,43 @@ class GoogleCalendarTools implements CalendarExtension {
 
   private enhanceEventCardWithResilience(cardElement: HTMLElement): void {
     const startTime = Date.now();
+    const eventId = cardElement.getAttribute('data-eventid') || 'unknown';
     
     try {
-      // Timeout protection for individual enhancements
-      const enhancementPromise = new Promise<void>((resolve, reject) => {
-        try {
-          this.enhanceEventCard(cardElement);
-          resolve();
-        } catch (error) {
-          reject(error);
-        }
-      });
+      this.log(`Starting enhancement for event: ${eventId}`);
       
-      const timeoutPromise = new Promise<void>((_, reject) => {
-        setTimeout(() => reject(new Error('Enhancement timeout')), this.RESILIENCE_CONFIG.enhancementTimeout);
-      });
+      // Direct synchronous enhancement - no need for complex Promise handling
+      this.enhanceEventCard(cardElement);
       
-      Promise.race([enhancementPromise, timeoutPromise])
-        .then(() => {
-          this.health.totalEnhanced++;
-          const duration = Date.now() - startTime;
-          if (duration > 1000) {
-            this.log(`Slow enhancement detected: ${duration}ms`);
-          }
-        })
-        .catch((error) => {
-          this.health.failedEnhancements++;
-          this.error('Enhancement failed with timeout protection', error);
-        });
+      // Track success
+      this.health.totalEnhanced++;
+      const duration = Date.now() - startTime;
+      
+      this.log(`✅ Enhancement completed for event: ${eventId} in ${duration}ms`);
+      
+      if (duration > 1000) {
+        this.log(`⚠️ Slow enhancement detected: ${duration}ms for event: ${eventId}`);
+      }
         
     } catch (error) {
       this.health.failedEnhancements++;
-      this.error('Enhancement failed immediately', error as Error);
+      this.error(`❌ Enhancement failed for event: ${eventId}`, error as Error);
+      
+      // Don't let individual failures break the entire system
+      try {
+        // Attempt basic tracking even if enhancement failed
+        const eventId = cardElement.getAttribute('data-eventid');
+        if (eventId) {
+          this.eventCards.set(eventId, {
+            element: cardElement,
+            eventId,
+            hasCustomUI: false, // Mark as not enhanced
+            lastSeen: Date.now(),
+          });
+        }
+      } catch (fallbackError) {
+        this.error('Fallback tracking also failed', fallbackError as Error);
+      }
     }
   }
 
@@ -296,12 +301,21 @@ class GoogleCalendarTools implements CalendarExtension {
       return;
     }
 
-    // Check if already enhanced
-    if (this.eventCards.has(eventId)) {
-      // Update last seen timestamp
+    // Check if already enhanced AND has the button
+    const existingButton = cardElement.querySelector('.gct-duplicate-btn');
+    if (this.eventCards.has(eventId) && existingButton) {
+      // Update last seen timestamp and we're done
       const existingCard = this.eventCards.get(eventId)!;
       existingCard.lastSeen = Date.now();
+      this.log(`Event ${eventId} already enhanced with button present`);
       return;
+    }
+
+    // If tracked but missing button, or not tracked at all, enhance/re-enhance
+    if (this.eventCards.has(eventId) && !existingButton) {
+      this.log(`Re-injecting missing button for tracked event: ${eventId}`);
+    } else {
+      this.log(`Enhancing new event: ${eventId}`);
     }
 
     try {
@@ -460,22 +474,47 @@ class GoogleCalendarTools implements CalendarExtension {
 
   private injectDuplicateButton(cardElement: HTMLElement, eventId: string): void {
     // Check if button already exists
-    if (cardElement.querySelector('.gct-duplicate-btn')) return;
+    const existingButton = cardElement.querySelector('.gct-duplicate-btn');
+    if (existingButton) {
+      this.log(`Button already exists for event: ${eventId}`);
+      return;
+    }
 
-    const button = document.createElement('button');
-    button.className = 'gct-duplicate-btn';
-    button.setAttribute('data-event-id', eventId);
-    button.title = 'Duplicate event to tomorrow';
-    button.innerHTML = '📋';
+    try {
+      this.log(`Injecting duplicate button for event: ${eventId}`);
+      
+      const button = document.createElement('button');
+      button.className = 'gct-duplicate-btn';
+      button.setAttribute('data-event-id', eventId);
+      button.title = 'Duplicate event to tomorrow';
+      button.innerHTML = '📋';
 
-    // Append to the card
-    cardElement.appendChild(button);
+      // Ensure the parent element can contain the button
+      if (!cardElement.style.position || cardElement.style.position === 'static') {
+        cardElement.style.position = 'relative';
+      }
 
-    // Add event listener
-    button.addEventListener('click', (e) => {
-      e.stopPropagation(); // Prevent triggering the event click
-      this.handleEventDuplicate(eventId);
-    });
+      // Append to the card
+      cardElement.appendChild(button);
+
+      // Add event listener
+      button.addEventListener('click', (e) => {
+        e.stopPropagation(); // Prevent triggering the event click
+        this.handleEventDuplicate(eventId);
+      });
+
+      // Verify injection succeeded
+      const verifyButton = cardElement.querySelector('.gct-duplicate-btn');
+      if (verifyButton) {
+        this.log(`✅ Button successfully injected for event: ${eventId}`);
+      } else {
+        this.error(`❌ Button injection failed for event: ${eventId} - not found after injection`);
+      }
+      
+    } catch (error) {
+      this.error(`Failed to inject button for event ${eventId}`, error as Error);
+      throw error;
+    }
   }
 
 
@@ -2700,8 +2739,12 @@ class GoogleCalendarTools implements CalendarExtension {
       const selectors = [this.SELECTORS.eventCard, ...this.SELECTORS.eventCardFallbacks];
       let foundEvents = 0;
       let totalCards = 0;
+      let enhancedEvents = 0;
       
-      this.log('Starting fast scan for new events...');
+      this.log('🔍 Starting fast scan for new events...');
+      
+      // First, let's do a debug scan to see what's available
+      this.debugScanSelectors();
       
       // Try all selectors, don't break early
       for (const selector of selectors) {
@@ -2715,34 +2758,77 @@ class GoogleCalendarTools implements CalendarExtension {
             eventCards.forEach((card) => {
               const eventId = card.getAttribute('data-eventid');
               if (eventId) {
-                if (!this.eventCards.has(eventId)) {
-                  this.log(`Enhancing new event: ${eventId}`);
+                const isTracked = this.eventCards.has(eventId);
+                const hasButton = card.querySelector('.gct-duplicate-btn') !== null;
+                
+                if (!isTracked) {
+                  this.log(`🆕 Enhancing new event: ${eventId}`);
                   this.enhanceEventCardWithResilience(card);
-                  foundEvents++;
+                  enhancedEvents++;
+                } else if (!hasButton) {
+                  this.log(`🔧 Re-enhancing event missing button: ${eventId}`);
+                  this.enhanceEventCardWithResilience(card);
+                  enhancedEvents++;
                 } else {
-                  // Check if existing card needs re-enhancement (missing button)
-                  const existingButton = card.querySelector('.gct-duplicate-btn');
-                  if (!existingButton) {
-                    this.log(`Re-enhancing event missing button: ${eventId}`);
-                    this.enhanceEventCardWithResilience(card);
-                    foundEvents++;
-                  }
+                  this.log(`✅ Event already enhanced with button: ${eventId}`);
                 }
+                foundEvents++;
+              } else {
+                this.log(`⚠️ Event card found but missing data-eventid attribute`);
               }
             });
           }
         } catch (error) {
-          this.log(`Error with selector ${selector}:`, error);
+          this.log(`❌ Error with selector ${selector}:`, error);
           continue;
         }
       }
       
-      this.log(`Fast scan complete: Found ${totalCards} total cards, enhanced ${foundEvents} events`);
+      this.log(`🎯 Fast scan complete: Found ${totalCards} total cards, processed ${foundEvents} events, enhanced ${enhancedEvents} events`);
+      
+      // If we found cards but enhanced nothing, that might indicate an issue
+      if (totalCards > 0 && enhancedEvents === 0) {
+        this.log(`⚠️ Warning: Found ${totalCards} cards but enhanced 0 events - possible selector or injection issue`);
+      }
       
     } catch (error) {
       this.error('Error in fast event scanning', error as Error);
       // Fallback to regular scanning
       this.scanForEventCardsWithResilience();
+    }
+  }
+
+  // Debug method to understand what's on the page
+  private debugScanSelectors(): void {
+    this.log('🔍 DEBUG: Scanning page for event-related elements...');
+    
+    // Check for any elements with data-eventid
+    const allEventElements = document.querySelectorAll('[data-eventid]');
+    this.log(`Found ${allEventElements.length} total elements with data-eventid`);
+    
+    // Check each of our selectors individually
+    const selectors = [this.SELECTORS.eventCard, ...this.SELECTORS.eventCardFallbacks];
+    selectors.forEach((selector, index) => {
+      const elements = document.querySelectorAll(selector);
+      this.log(`Selector ${index + 1} (${selector}): ${elements.length} elements`);
+    });
+    
+    // Check for common calendar class names
+    const commonClasses = ['.rSoRzd', '[role="button"]', '.gV7Drd', '[data-eventchip]'];
+    commonClasses.forEach(className => {
+      const elements = document.querySelectorAll(className);
+      this.log(`Common class ${className}: ${elements.length} elements`);
+    });
+    
+    // Sample a few elements to understand structure
+    if (allEventElements.length > 0) {
+      this.log('Sample event element structure:');
+      const sample = allEventElements[0] as HTMLElement;
+      this.log(`- Tag: ${sample.tagName}`);
+      this.log(`- Classes: ${sample.className}`);
+      this.log(`- Role: ${sample.getAttribute('role')}`);
+      this.log(`- Parent tag: ${sample.parentElement?.tagName}`);
+      this.log(`- Parent classes: ${sample.parentElement?.className}`);
     }
   }
 
