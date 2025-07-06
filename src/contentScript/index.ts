@@ -210,8 +210,19 @@ class GoogleCalendarTools implements CalendarExtension {
     // Inject CSS for our custom elements
     this.injectStyles();
     
-    // Find and enhance existing event cards
+    // Find and enhance existing event cards with multiple attempts
     this.scanForEventCardsWithResilience();
+    
+    // FIXED: Additional scan attempts to ensure we catch events
+    setTimeout(() => {
+      this.log('Running additional scan after 200ms');
+      this.fastScanForNewEvents();
+    }, 200);
+    
+    setTimeout(() => {
+      this.log('Running final scan after 1 second');
+      this.fastScanForNewEvents();
+    }, 1000);
     
     // Set up MutationObserver to handle dynamic changes
     this.setupDOMObserver();
@@ -2471,44 +2482,20 @@ class GoogleCalendarTools implements CalendarExtension {
       this.observer.disconnect();
     }
 
-    // OPTIMIZED: Reduced debounce for faster responsiveness
+    // FIXED: Simplified but fast approach
     let debounceTimer: NodeJS.Timeout | null = null;
-    const DEBOUNCE_DELAY = 50; // OPTIMIZED: 50ms instead of 150ms
-    let immediateProcessing = false;
+    const DEBOUNCE_DELAY = 50; // Keep fast response time
 
     this.observer = new MutationObserver((mutations) => {
-      // OPTIMIZED: Immediate processing for critical event card additions
-      const hasEventCardMutations = mutations.some(mutation => {
-        if (mutation.type === 'childList') {
-          return Array.from(mutation.addedNodes).some(node => {
-            if (node instanceof HTMLElement) {
-              return node.hasAttribute('data-eventid') || 
-                     node.querySelector('[data-eventid]') !== null;
-            }
-            return false;
-          });
-        }
-        return false;
-      });
-
-      if (hasEventCardMutations && !immediateProcessing) {
-        // Process immediately for event card additions
-        immediateProcessing = true;
-        this.processMutations(mutations);
-        setTimeout(() => { immediateProcessing = false; }, 100);
-      } else {
-        // Clear existing debounce timer
-        if (debounceTimer) {
-          clearTimeout(debounceTimer);
-        }
-
-        // Debounce other mutations for performance
-        debounceTimer = setTimeout(() => {
-          if (!immediateProcessing) {
-            this.processMutations(mutations);
-          }
-        }, DEBOUNCE_DELAY);
+      // Clear existing debounce timer
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
       }
+
+      // Process all mutations with fast debounce
+      debounceTimer = setTimeout(() => {
+        this.processMutations(mutations);
+      }, DEBOUNCE_DELAY);
     });
 
     // Start observing with comprehensive configuration
@@ -2653,11 +2640,11 @@ class GoogleCalendarTools implements CalendarExtension {
         this.log(`DOM changes processed: +${addedEvents} events, -${removedEvents} events`);
       }
       
-      // OPTIMIZED: Trigger immediate fast scan if no events were processed but DOM changed significantly
-      if (addedEvents === 0 && mutations.length > 5) {
-        // Significant DOM changes but no events processed - might be calendar view changes
-        this.log('Significant DOM changes detected, triggering fast scan');
-        setTimeout(() => this.fastScanForNewEvents(), 10); // Very short delay
+      // FIXED: Always run fast scan if no events were added to ensure we don't miss anything
+      if (addedEvents === 0 && mutations.length > 0) {
+        // DOM changes but no events processed - run comprehensive scan to catch missed events
+        this.log('DOM changes detected with no events added, running comprehensive scan');
+        setTimeout(() => this.fastScanForNewEvents(), 100);
       }
 
     } catch (error) {
@@ -2707,35 +2694,50 @@ class GoogleCalendarTools implements CalendarExtension {
     }
   }
 
-  // OPTIMIZED: Fast scanning method for immediate response to changes
+  // FIXED: Comprehensive scanning method for reliable event detection
   private fastScanForNewEvents(): void {
     try {
-      // Use a more targeted approach for faster scanning
       const selectors = [this.SELECTORS.eventCard, ...this.SELECTORS.eventCardFallbacks];
       let foundEvents = 0;
+      let totalCards = 0;
       
+      this.log('Starting fast scan for new events...');
+      
+      // Try all selectors, don't break early
       for (const selector of selectors) {
         try {
           const eventCards = document.querySelectorAll(selector) as NodeListOf<HTMLElement>;
+          totalCards += eventCards.length;
+          
           if (eventCards.length > 0) {
+            this.log(`Found ${eventCards.length} event cards with selector: ${selector}`);
+            
             eventCards.forEach((card) => {
               const eventId = card.getAttribute('data-eventid');
-              if (eventId && !this.eventCards.has(eventId)) {
-                this.enhanceEventCardWithResilience(card);
-                foundEvents++;
+              if (eventId) {
+                if (!this.eventCards.has(eventId)) {
+                  this.log(`Enhancing new event: ${eventId}`);
+                  this.enhanceEventCardWithResilience(card);
+                  foundEvents++;
+                } else {
+                  // Check if existing card needs re-enhancement (missing button)
+                  const existingButton = card.querySelector('.gct-duplicate-btn');
+                  if (!existingButton) {
+                    this.log(`Re-enhancing event missing button: ${eventId}`);
+                    this.enhanceEventCardWithResilience(card);
+                    foundEvents++;
+                  }
+                }
               }
             });
-            break; // Found events with this selector, stop trying others
           }
         } catch (error) {
-          // Continue with next selector
+          this.log(`Error with selector ${selector}:`, error);
           continue;
         }
       }
       
-      if (foundEvents > 0) {
-        this.log(`Fast scan: Enhanced ${foundEvents} new events`);
-      }
+      this.log(`Fast scan complete: Found ${totalCards} total cards, enhanced ${foundEvents} events`);
       
     } catch (error) {
       this.error('Error in fast event scanning', error as Error);
@@ -2756,6 +2758,8 @@ class GoogleCalendarTools implements CalendarExtension {
       const staleThreshold = Date.now() - this.RESILIENCE_CONFIG.staleEventThreshold;
       let staleEvents = 0;
       
+      this.log(`Starting health check... Current events: ${this.eventCards.size}`);
+      
       // Check for stale event cards
       this.eventCards.forEach((eventCard, eventId) => {
         if (eventCard.lastSeen < staleThreshold || !document.contains(eventCard.element)) {
@@ -2768,9 +2772,25 @@ class GoogleCalendarTools implements CalendarExtension {
         this.log(`Health check: Cleaned up ${staleEvents} stale events`);
       }
       
+      // FIXED: Always run comprehensive scan during health check
+      this.log('Health check: Running comprehensive scan for new events');
+      this.fastScanForNewEvents();
+      
       // Check overall health
       const errorRate = this.health.failedEnhancements / Math.max(this.health.totalEnhanced, 1);
       this.health.isHealthy = errorRate < 0.1 && this.health.errorCount < this.RESILIENCE_CONFIG.maxErrorCount;
+      
+      this.log(`Health check completed. Events: ${this.eventCards.size}, Errors: ${this.health.errorCount}, Healthy: ${this.health.isHealthy}`);
+      
+      // FIXED: Trigger recovery if no events found at all (might indicate broken selectors)
+      if (this.eventCards.size === 0) {
+        const visibleEvents = document.querySelectorAll('[data-eventid]').length;
+        if (visibleEvents > 0) {
+          this.log(`Health check: Found ${visibleEvents} events in DOM but none enhanced - triggering recovery`);
+          this.performRecovery();
+          return;
+        }
+      }
       
       if (!this.health.isHealthy) {
         this.log(`Health check failed: Error rate ${(errorRate * 100).toFixed(1)}%, Error count: ${this.health.errorCount}`);
