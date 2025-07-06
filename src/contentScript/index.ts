@@ -350,9 +350,7 @@ class GoogleCalendarTools implements CalendarExtension {
     style.textContent = `
       /* Google Calendar Tools Custom Styles */
       .gct-duplicate-btn {
-        position: absolute;
-        top: 2px;
-        right: 2px;
+        float: right;
         background: none;
         border: none;
         cursor: pointer;
@@ -360,12 +358,14 @@ class GoogleCalendarTools implements CalendarExtension {
         transition: opacity 0.2s ease, background-color 0.2s ease;
         z-index: 10;
         border-radius: 50%;
-        width: 24px;
-        height: 24px;
-        display: flex;
+        width: 20px;
+        height: 20px;
+        display: inline-flex;
         align-items: center;
         justify-content: center;
         padding: 0;
+        margin: 2px;
+        font-size: 12px;
       }
       
       .gct-duplicate-btn:hover {
@@ -489,10 +489,7 @@ class GoogleCalendarTools implements CalendarExtension {
       button.title = 'Duplicate event to tomorrow';
       button.innerHTML = '📋';
 
-      // Ensure the parent element can contain the button
-      if (!cardElement.style.position || cardElement.style.position === 'static') {
-        cardElement.style.position = 'relative';
-      }
+      // Don't modify parent positioning to avoid layout disruption
 
       // Append to the card
       cardElement.appendChild(button);
