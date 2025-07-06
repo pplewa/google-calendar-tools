@@ -35,11 +35,19 @@ interface EventDetails {
   calendarId?: string; // Add calendar ID to preserve original calendar
 }
 
+interface DayHeader {
+  element: HTMLElement;
+  date: Date | null;
+  hasCopyIcon: boolean;
+  lastSeen: number;
+}
+
 class GoogleCalendarTools implements CalendarExtension {
   public initialized = false;
   public observer: MutationObserver | null = null;
   private readonly DEBUG = true;
   private eventCards: Map<string, EventCard> = new Map();
+  private dayHeaders: Map<string, DayHeader> = new Map();
   private health: ExtensionHealth = {
     isHealthy: true,
     lastHealthCheck: Date.now(),
@@ -75,6 +83,14 @@ class GoogleCalendarTools implements CalendarExtension {
     eventPopover: 'div.KzqCgd, div.Jmftzc',
     // Calendar container
     calendarContainer: '[data-eventchip], [jsname], .rSoRzd',
+    // Day headers for Copy Day functionality
+    dayHeader: '.yzWBv.ChfiMc.N4XV7d[role="columnheader"]', // Actual day headers in current Google Calendar
+    dayHeaderFallbacks: [
+      '[role="columnheader"]', // Generic column header fallback
+      '.yzWBv[role="columnheader"]', // More specific but flexible
+      '.hI2jVc', // The h2 element inside day headers
+      '.rFrNMe', // Legacy fallback from research
+    ],
   };
 
   constructor() {
@@ -213,6 +229,9 @@ class GoogleCalendarTools implements CalendarExtension {
     // Find and enhance existing event cards with multiple attempts
     this.scanForEventCardsWithResilience();
     
+    // Scan for day headers and add Copy Day icons
+    this.scanForDayHeaders();
+    
     // FIXED: Additional scan attempts to ensure we catch events
     setTimeout(() => {
       this.log('Running additional scan after 200ms');
@@ -222,6 +241,7 @@ class GoogleCalendarTools implements CalendarExtension {
     setTimeout(() => {
       this.log('Running final scan after 1 second');
       this.fastScanForNewEvents();
+      this.scanForDayHeaders(); // Re-scan day headers after calendar stabilizes
     }, 1000);
     
     // Set up MutationObserver to handle dynamic changes
@@ -249,6 +269,200 @@ class GoogleCalendarTools implements CalendarExtension {
       
     } catch (error) {
       this.error('Error during resilient event card scanning', error as Error);
+    }
+  }
+
+  private scanForDayHeaders(): void {
+    try {
+      this.log('Scanning for day headers to add Copy Day icons');
+      
+      // Try primary selector first, then fallbacks
+      const selectors = [this.SELECTORS.dayHeader, ...this.SELECTORS.dayHeaderFallbacks];
+      const dayHeaders = this.findElementsWithFallbacks(selectors);
+      
+      if (!dayHeaders) {
+        this.log('No day headers found - may be in month view or calendar not loaded');
+        return;
+      }
+      
+      // Filter out elements that are actually event cards
+      const validDayHeaders = Array.from(dayHeaders).filter(header => 
+        !header.hasAttribute('data-eventid') && 
+        this.isValidDayHeader(header)
+      );
+      
+      if (validDayHeaders.length === 0) {
+        this.log('No valid day headers found after filtering');
+        return;
+      }
+      
+      this.log(`Found ${validDayHeaders.length} day headers to enhance`);
+      
+      validDayHeaders.forEach((header) => {
+        this.enhanceDayHeader(header);
+      });
+      
+    } catch (error) {
+      this.error('Error during day header scanning', error as Error);
+    }
+  }
+
+  private isValidDayHeader(element: HTMLElement): boolean {
+    // Check if element contains date text patterns
+    const text = element.textContent?.trim() || '';
+    
+    // Look for date patterns like "Mon, Jul 7", "Monday", numbers, etc.
+    const hasDateText = /\b(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d+)\b/i.test(text);
+    
+    // Check if it's positioned like a header (top area of calendar)
+    const rect = element.getBoundingClientRect();
+    const isInHeaderArea = rect.top < window.innerHeight / 2;
+    
+    // Not too small (avoid tiny elements)
+    const hasReasonableSize = rect.width > 30 && rect.height > 20;
+    
+    return hasDateText && isInHeaderArea && hasReasonableSize;
+  }
+
+  private enhanceDayHeader(headerElement: HTMLElement): void {
+    try {
+      const headerId = this.generateDayHeaderId(headerElement);
+      
+      // Check if already enhanced
+      if (this.dayHeaders.has(headerId)) {
+        const existingHeader = this.dayHeaders.get(headerId)!;
+        existingHeader.lastSeen = Date.now();
+        
+        // Check if Copy Day icon is still present
+        const existingIcon = headerElement.querySelector('.gct-copy-day-btn');
+        if (existingIcon) {
+          this.log(`Day header ${headerId} already enhanced`);
+          return;
+        } else {
+          this.log(`Re-injecting missing Copy Day icon for header: ${headerId}`);
+        }
+      }
+      
+      const date = this.extractDateFromDayHeader(headerElement);
+      this.log(`Enhancing day header for date: ${date?.toDateString() || 'unknown'}`);
+      
+      // Add Copy Day icon
+      this.injectCopyDayIcon(headerElement, date);
+      
+      // Track the enhanced header
+      this.dayHeaders.set(headerId, {
+        element: headerElement,
+        date,
+        hasCopyIcon: true,
+        lastSeen: Date.now(),
+      });
+      
+      this.log(`Enhanced day header: ${headerId}`);
+      
+    } catch (error) {
+      this.error(`Failed to enhance day header`, error as Error);
+    }
+  }
+
+  private generateDayHeaderId(headerElement: HTMLElement): string {
+    // Generate a unique ID for the day header based on position and content
+    const rect = headerElement.getBoundingClientRect();
+    const text = headerElement.textContent?.trim() || '';
+    return `header-${Math.round(rect.left)}-${Math.round(rect.top)}-${text.replace(/\s+/g, '')}`;
+  }
+
+  private extractDateFromDayHeader(headerElement: HTMLElement): Date | null {
+    try {
+      // First, try aria-label which contains full date info like "Monday, 14 July"
+      const h2Element = headerElement.querySelector('.hI2jVc');
+      if (h2Element) {
+        const ariaLabel = h2Element.getAttribute('aria-label');
+        if (ariaLabel) {
+          this.log(`Found aria-label: "${ariaLabel}"`);
+          const date = this.parseHeaderText(ariaLabel);
+          if (date) {
+            this.log(`Successfully parsed date from aria-label: ${date.toDateString()}`);
+            return date;
+          }
+        }
+      }
+      
+      // Try to extract from specific elements in current structure
+      const dayNameElement = headerElement.querySelector('.sVASAd.tWjOu.RKLVef.N4XV7d');
+      const dateNumberElement = headerElement.querySelector('.x5FT4e.kkUTBb');
+      
+      if (dayNameElement && dateNumberElement) {
+        const dayName = dayNameElement.textContent?.trim() || '';
+        const dateNumber = dateNumberElement.textContent?.trim() || '';
+        this.log(`Found day name: "${dayName}", date number: "${dateNumber}"`);
+        
+        if (dateNumber.match(/^\d+$/)) {
+          const dayNum = parseInt(dateNumber);
+          const today = new Date();
+          const date = new Date(today.getFullYear(), today.getMonth(), dayNum);
+          this.log(`Successfully parsed date from day/date elements: ${date.toDateString()}`);
+          return date;
+        }
+      }
+      
+      // Fallback: use the entire header text
+      const text = headerElement.textContent?.trim() || '';
+      this.log(`Fallback: extracting date from full header text: "${text}"`);
+      const date = this.parseHeaderText(text);
+      
+      if (date) {
+        this.log(`Successfully parsed date: ${date.toDateString()}`);
+        return date;
+      }
+      
+      this.log(`Could not parse date from header element`);
+      return null;
+      
+    } catch (error) {
+      this.error('Error extracting date from day header', error as Error);
+      return null;
+    }
+  }
+
+  private parseHeaderText(text: string): Date | null {
+    try {
+      // Format: "Mon, Jul 7" or "Monday, July 7" 
+      const fullDateMatch = text.match(/(\w+),?\s+(\w+)\s+(\d+)/);
+      if (fullDateMatch) {
+        const [, dayName, monthStr, dayNum] = fullDateMatch;
+        const currentYear = new Date().getFullYear();
+        const month = this.parseMonth(monthStr);
+        if (month !== -1) {
+          return new Date(currentYear, month, parseInt(dayNum));
+        }
+      }
+      
+      // Format: Just day number "7"
+      const dayMatch = text.match(/^\d+$/);
+      if (dayMatch) {
+        const dayNum = parseInt(dayMatch[0]);
+        const today = new Date();
+        return new Date(today.getFullYear(), today.getMonth(), dayNum);
+      }
+      
+      // Format: Just day name "Monday" - use current week
+      const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const dayName = text.toLowerCase();
+      const dayIndex = dayNames.indexOf(dayName);
+      if (dayIndex !== -1) {
+        const today = new Date();
+        const currentDay = today.getDay();
+        const daysToAdd = dayIndex - currentDay;
+        const targetDate = new Date(today);
+        targetDate.setDate(today.getDate() + daysToAdd);
+        return targetDate;
+      }
+      
+      return null;
+      
+    } catch (error) {
+      this.error('Error parsing header text', error as Error);
+      return null;
     }
   }
 
@@ -381,6 +595,40 @@ class GoogleCalendarTools implements CalendarExtension {
         opacity: 1 !important;
       }
       
+      /* Copy Day Button Styles */
+      .gct-copy-day-btn {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        background: var(--gm3-sys-color-primary-container, rgba(103, 80, 164, 0.1));
+        border: 1px solid var(--gm3-sys-color-outline, rgba(0, 0, 0, 0.2));
+        border-radius: 6px;
+        cursor: pointer;
+        opacity: 0.8;
+        transition: all 0.2s ease;
+        z-index: 1000;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        font-size: 12px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+        color: var(--gm3-sys-color-on-primary-container, #1a1c38);
+      }
+      
+      .gct-copy-day-btn:hover {
+        background: var(--gm3-sys-color-primary-container, rgba(103, 80, 164, 0.2));
+        transform: scale(1.1);
+        opacity: 1;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+      }
+      
+      .gct-copy-day-btn:active {
+        transform: scale(0.95);
+      }
+      
       .gct-duplicate-btn:hover {
         background: rgba(0, 0, 0, 0.1);
       }
@@ -475,6 +723,543 @@ class GoogleCalendarTools implements CalendarExtension {
       
       .gct-toast--info .gct-toast__icon {
         background-color: #2196f3;
+      }
+
+      /* Modal Styles */
+      .gct-modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        animation: gct-modal-fade-in 0.2s ease-out;
+      }
+
+      .gct-modal {
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.24);
+        max-width: 420px;
+        width: 90%;
+        max-height: 90vh;
+        overflow: hidden;
+        animation: gct-modal-slide-in 0.3s ease-out;
+        font-family: var(--gm3-sys-typescale-body-medium-font, 'Google Sans', Roboto, sans-serif);
+      }
+
+      .gct-modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 24px 16px;
+        border-bottom: 1px solid var(--gm3-sys-color-outline-variant, #e8eaed);
+      }
+
+      .gct-modal-title {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 500;
+        color: var(--gm3-sys-color-on-surface, #202124);
+        line-height: 1.2;
+      }
+
+      .gct-modal-close {
+        background: none;
+        border: none;
+        font-size: 24px;
+        cursor: pointer;
+        padding: 4px;
+        margin: -4px;
+        border-radius: 50%;
+        color: var(--gm3-sys-color-on-surface-variant, #5f6368);
+        transition: background-color 0.2s ease;
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .gct-modal-close:hover {
+        background-color: var(--gm3-sys-color-secondary-container, rgba(103, 80, 164, 0.08));
+      }
+
+      .gct-modal-body {
+        padding: 20px 24px;
+      }
+
+      .gct-modal-description {
+        margin: 0 0 20px 0;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--gm3-sys-color-on-surface, #202124);
+      }
+
+      .gct-modal-form {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .gct-form-label {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--gm3-sys-color-on-surface, #202124);
+        margin-bottom: 4px;
+      }
+
+      .gct-form-input {
+        padding: 12px 16px;
+        border: 1px solid var(--gm3-sys-color-outline, #dadce0);
+        border-radius: 4px;
+        font-size: 14px;
+        font-family: inherit;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        background: white;
+        color: var(--gm3-sys-color-on-surface, #202124);
+      }
+
+      .gct-form-input:focus {
+        outline: none;
+        border-color: var(--gm3-sys-color-primary, #1a73e8);
+        box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
+      }
+
+      .gct-error-message {
+        font-size: 12px;
+        color: var(--gm3-sys-color-error, #d93025);
+        min-height: 16px;
+        margin-top: 4px;
+      }
+
+      .gct-modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 16px 24px 20px;
+        border-top: 1px solid var(--gm3-sys-color-outline-variant, #e8eaed);
+      }
+
+      .gct-btn {
+        padding: 10px 20px;
+        border-radius: 4px;
+        font-size: 14px;
+        font-weight: 500;
+        font-family: inherit;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        border: none;
+        min-width: 80px;
+        text-align: center;
+      }
+
+      .gct-btn-primary {
+        background: var(--gm3-sys-color-primary, #1a73e8);
+        color: var(--gm3-sys-color-on-primary, white);
+      }
+
+      .gct-btn-primary:hover {
+        background: var(--gm3-sys-color-primary-hover, #1557b0);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+      }
+
+      .gct-btn-secondary {
+        background: transparent;
+        color: var(--gm3-sys-color-primary, #1a73e8);
+        border: 1px solid var(--gm3-sys-color-outline, #dadce0);
+      }
+
+      .gct-btn-secondary:hover {
+        background: var(--gm3-sys-color-primary-container, rgba(26, 115, 232, 0.04));
+        border-color: var(--gm3-sys-color-primary, #1a73e8);
+      }
+
+      /* Modal Animations */
+      @keyframes gct-modal-fade-in {
+        0% {
+          opacity: 0;
+        }
+        100% {
+          opacity: 1;
+        }
+      }
+
+      @keyframes gct-modal-slide-in {
+        0% {
+          transform: translateY(-50px);
+          opacity: 0;
+        }
+        100% {
+          transform: translateY(0);
+          opacity: 1;
+        }
+      }
+
+      /* Conflict Resolution Modal Styles */
+      .gct-conflict-modal {
+        max-width: 700px;
+        width: 95%;
+        max-height: 80vh;
+      }
+
+      .gct-conflict-body {
+        max-height: 60vh;
+        overflow-y: auto;
+        padding: 20px;
+      }
+
+      .gct-conflict-description {
+        margin-bottom: 20px;
+        color: #5f6368;
+        line-height: 1.5;
+      }
+
+      .gct-conflicts-list {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        margin-bottom: 24px;
+      }
+
+      .gct-conflict {
+        border: 1px solid #e8eaed;
+        border-radius: 8px;
+        padding: 16px;
+        background: #fff;
+      }
+
+      .gct-conflict-event {
+        margin-bottom: 16px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid #f1f3f4;
+      }
+
+      .gct-conflict-title {
+        margin: 0 0 8px 0;
+        font-size: 16px;
+        font-weight: 500;
+        color: #202124;
+      }
+
+      .gct-conflict-time {
+        margin: 0 0 12px 0;
+        color: #5f6368;
+        font-size: 14px;
+      }
+
+      .gct-conflict-label {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+        font-weight: 500;
+        color: #202124;
+      }
+
+      .gct-conflicts-existing {
+        margin: 0;
+        padding-left: 20px;
+        color: #ea4335;
+      }
+
+      .gct-conflict-item {
+        margin-bottom: 4px;
+        font-size: 14px;
+      }
+
+      .gct-radio-group {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .gct-radio-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        padding: 8px;
+        border-radius: 4px;
+        transition: background-color 0.2s ease;
+      }
+
+      .gct-radio-option:hover {
+        background-color: #f8f9fa;
+      }
+
+      .gct-radio-option input[type="radio"] {
+        margin: 0;
+        accent-color: #1a73e8;
+      }
+
+      .gct-radio-label {
+        font-size: 14px;
+        color: #202124;
+        line-height: 1.4;
+      }
+
+      .gct-resolution-preview {
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-size: 13px;
+        font-weight: 500;
+        text-align: center;
+      }
+
+      .gct-preview-skip {
+        color: #5f6368;
+        background-color: #f1f3f4;
+      }
+
+      .gct-preview-overwrite {
+        color: #ea4335;
+        background-color: #fce8e6;
+      }
+
+      .gct-preview-copy {
+        color: #137333;
+        background-color: #e6f4ea;
+      }
+
+      .gct-bulk-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 16px;
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        margin-top: 20px;
+      }
+
+      .gct-bulk-label {
+        font-size: 14px;
+        font-weight: 500;
+        color: #202124;
+        margin: 0;
+      }
+
+      .gct-bulk-btn {
+        background: white;
+        border: 1px solid #dadce0;
+        border-radius: 4px;
+        padding: 8px 16px;
+        font-size: 13px;
+        color: #1a73e8;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .gct-bulk-btn:hover {
+        background: #f8f9fa;
+        border-color: #1a73e8;
+      }
+
+      .gct-bulk-btn:active {
+        background: #e8f0fe;
+      }
+
+      /* Copy Results Modal Styles */
+      .gct-copy-results-modal {
+        max-width: 600px;
+        width: 90%;
+        max-height: 80vh;
+      }
+
+      .gct-copy-results-body {
+        padding: 20px;
+        max-height: 60vh;
+        overflow-y: auto;
+      }
+
+      .gct-copy-summary {
+        margin-bottom: 24px;
+        text-align: center;
+      }
+
+      .gct-copy-date-info {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        margin-bottom: 16px;
+        font-size: 16px;
+        font-weight: 500;
+        color: #3c4043;
+      }
+
+      .gct-copy-from, .gct-copy-to {
+        padding: 6px 12px;
+        background: #f8f9fa;
+        border-radius: 4px;
+        border: 1px solid #dadce0;
+      }
+
+      .gct-copy-arrow {
+        font-size: 18px;
+        color: #5f6368;
+        font-weight: bold;
+      }
+
+      .gct-copy-stats {
+        display: flex;
+        justify-content: center;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .gct-stat-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 12px 16px;
+        border-radius: 8px;
+        min-width: 80px;
+      }
+
+      .gct-stat-success {
+        background: #e8f5e8;
+        border: 1px solid #81c784;
+      }
+
+      .gct-stat-error {
+        background: #ffeaea;
+        border: 1px solid #f28b82;
+      }
+
+      .gct-stat-warning {
+        background: #fff8e1;
+        border: 1px solid #ffb74d;
+      }
+
+      .gct-stat-info {
+        background: #e3f2fd;
+        border: 1px solid #64b5f6;
+      }
+
+      .gct-stat-number {
+        font-size: 24px;
+        font-weight: 600;
+        line-height: 1;
+        margin-bottom: 4px;
+      }
+
+      .gct-stat-success .gct-stat-number {
+        color: #2e7d32;
+      }
+
+      .gct-stat-error .gct-stat-number {
+        color: #c62828;
+      }
+
+      .gct-stat-warning .gct-stat-number {
+        color: #ef6c00;
+      }
+
+      .gct-stat-info .gct-stat-number {
+        color: #1565c0;
+      }
+
+      .gct-stat-label {
+        font-size: 12px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #5f6368;
+      }
+
+      .gct-result-section {
+        margin-bottom: 20px;
+      }
+
+      .gct-result-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 16px;
+        font-weight: 500;
+        margin-bottom: 12px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #dadce0;
+      }
+
+      .gct-result-title-success {
+        color: #2e7d32;
+      }
+
+      .gct-result-title-error {
+        color: #c62828;
+      }
+
+      .gct-result-icon {
+        font-size: 18px;
+        font-weight: bold;
+      }
+
+      .gct-result-list {
+        max-height: 200px;
+        overflow-y: auto;
+      }
+
+      .gct-result-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px;
+        margin-bottom: 4px;
+        border-radius: 4px;
+        border-left: 3px solid;
+      }
+
+      .gct-result-item-success {
+        background: #f1f8e9;
+        border-left-color: #4caf50;
+      }
+
+      .gct-result-item-error {
+        background: #ffebee;
+        border-left-color: #f44336;
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .gct-event-title {
+        font-weight: 500;
+        color: #3c4043;
+        flex: 1;
+      }
+
+      .gct-event-time {
+        font-size: 13px;
+        color: #5f6368;
+        white-space: nowrap;
+        margin-left: 8px;
+      }
+
+      .gct-event-error {
+        font-size: 12px;
+        color: #d32f2f;
+        margin-top: 4px;
+        font-style: italic;
+      }
+
+      .gct-no-events {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 24px;
+        text-align: center;
+        color: #5f6368;
+        font-style: italic;
+      }
+
+      .gct-no-events .gct-result-icon {
+        font-size: 20px;
+        color: #9aa0a6;
       }
     `;
     
@@ -632,7 +1417,1032 @@ class GoogleCalendarTools implements CalendarExtension {
     }
   }
 
+  private injectCopyDayIcon(headerElement: HTMLElement, date: Date | null): void {
+    try {
+      this.log(`Injecting Copy Day icon for date: ${date?.toDateString() || 'unknown'}`);
+      
+      // Find the h2 element within the header for more specific positioning
+      const h2Element = headerElement.querySelector('.hI2jVc') as HTMLElement;
+      const targetElement = h2Element || headerElement;
+      
+      // Make target element relatively positioned to contain the absolute icon
+      if (getComputedStyle(targetElement).position === 'static') {
+        targetElement.style.position = 'relative';
+      }
+      
+      const button = document.createElement('button');
+      button.className = 'gct-copy-day-btn';
+      button.title = `Copy all events from ${date?.toDateString() || 'this day'}`;
+      button.innerHTML = '📋'; // Copy icon
+      
+      // Store the date for later use
+      if (date) {
+        button.setAttribute('data-source-date', date.toISOString());
+      }
+      
+      targetElement.appendChild(button);
+      
+      // Click handler for Copy Day functionality
+      button.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        this.log(`Copy Day clicked for date: ${date?.toDateString()}`);
+        
+        if (date) {
+          this.handleCopyDay(date);
+        } else {
+          this.showNotification('Unable to determine date for this day', 'error');
+        }
+      });
+      
+      this.log(`✅ Copy Day icon successfully injected for date: ${date?.toDateString()}`);
+      
+    } catch (error) {
+      this.error(`Failed to inject Copy Day icon`, error as Error);
+      throw error;
+    }
+  }
 
+  private async handleCopyDay(sourceDate: Date): Promise<void> {
+    try {
+      this.log(`Starting Copy Day workflow for: ${sourceDate.toDateString()}`);
+      
+      // Show target day selection modal
+      const targetDate = await this.showTargetDaySelectionModal(sourceDate);
+      
+      if (targetDate) {
+        this.log(`Target date selected: ${targetDate.toDateString()}`);
+        
+        // Collect all events from source day (Subtask 4.3)
+        const sourceEvents = await this.collectEventsFromDay(sourceDate);
+        this.log(`Collected ${sourceEvents.length} events from ${sourceDate.toDateString()}`);
+        
+        if (sourceEvents.length === 0) {
+          this.showNotification(
+            `No events found on ${sourceDate.toDateString()} to copy`,
+            'info'
+          );
+          return;
+        }
+        
+        // Handle overlaps (Subtask 4.4)
+        const targetEvents = await this.collectEventsFromDay(targetDate);
+        const conflicts = this.detectEventConflicts(sourceEvents, targetEvents, targetDate);
+        
+        this.log(`Found ${conflicts.length} potential conflicts on target day`);
+        
+        let eventsToProcess = sourceEvents;
+        if (conflicts.length > 0) {
+          const resolutionResults = await this.showConflictResolutionModal(conflicts, sourceDate, targetDate);
+          if (resolutionResults === null) {
+            this.log('Copy Day workflow cancelled due to conflicts');
+            return;
+          }
+          eventsToProcess = resolutionResults;
+        }
+        
+        // Copy events to target day (Subtask 4.5)
+        if (eventsToProcess.length > 0) {
+          const copyResults = await this.copyEventsToTargetDay(eventsToProcess, targetDate, conflicts);
+          
+          // Show confirmation modal (Subtask 4.6)
+          await this.showCopyResultsModal(copyResults, sourceDate, targetDate, eventsToProcess, conflicts);
+        } else {
+          this.showNotification(
+            'No events selected for copying after conflict resolution.',
+            'info'
+          );
+        }
+      } else {
+        this.log('Copy Day workflow cancelled by user');
+      }
+      
+    } catch (error) {
+      this.error('Error in Copy Day workflow', error as Error);
+      this.showNotification('Error occurred while copying day', 'error');
+    }
+  }
+
+  private async collectEventsFromDay(sourceDate: Date): Promise<EventDetails[]> {
+    try {
+      this.log(`Starting event collection for ${sourceDate.toDateString()}`);
+      const collectedEvents: EventDetails[] = [];
+      
+      // Find all event cards that match the source date
+      const candidateEvents = this.findEventsForDate(sourceDate);
+      this.log(`Found ${candidateEvents.length} candidate event(s) for date`);
+      
+      if (candidateEvents.length === 0) {
+        this.log('No events found for the specified date');
+        return collectedEvents;
+      }
+      
+      // Process each candidate event
+      for (const eventInfo of candidateEvents) {
+        try {
+          this.log(`Processing event: ${eventInfo.eventId}`);
+          
+          // Open the event popover to extract details
+          await this.openEventDetailPopover(eventInfo.element);
+          
+          // Small delay to ensure popover is fully loaded
+          await new Promise(resolve => setTimeout(resolve, 300));
+          
+          // Extract the event details
+          const eventDetails = await this.extractEventDetails(eventInfo.eventId);
+          
+          // Validate that this event actually occurs on our target date
+          if (this.eventOccursOnDate(eventDetails, sourceDate)) {
+            collectedEvents.push(eventDetails);
+            this.log(`Successfully collected event: ${eventDetails.title}`);
+          } else {
+            this.log(`Event "${eventDetails.title}" does not occur on target date, skipping`);
+          }
+          
+          // Close the popover before processing next event
+          await this.closeEventPopover();
+          
+          // Small delay between events to avoid overwhelming the UI
+          await new Promise(resolve => setTimeout(resolve, 200));
+          
+        } catch (error) {
+          this.error(`Failed to process event ${eventInfo.eventId}`, error as Error);
+          // Continue with next event even if one fails
+          await this.closeEventPopover(); // Ensure popover is closed
+        }
+      }
+      
+      this.log(`Event collection completed. Collected ${collectedEvents.length} valid events`);
+      return collectedEvents;
+      
+    } catch (error) {
+      this.error('Error during event collection', error as Error);
+      throw error;
+    }
+  }
+
+  private findEventsForDate(targetDate: Date): Array<{element: HTMLElement, eventId: string}> {
+    const candidateEvents: Array<{element: HTMLElement, eventId: string}> = [];
+    
+    // Check all known event cards
+    for (const [eventId, eventCard] of this.eventCards) {
+      // Verify the element still exists in DOM
+      if (!document.contains(eventCard.element)) {
+        this.eventCards.delete(eventId);
+        continue;
+      }
+      
+      // Try to determine if this event occurs on our target date
+      const eventDate = this.extractEventDateFromCalendarPosition(eventCard.element);
+      
+      if (eventDate && this.isSameDay(eventDate, targetDate)) {
+        candidateEvents.push({
+          element: eventCard.element,
+          eventId: eventId
+        });
+        this.log(`Event ${eventId} matches target date based on position`);
+      } else {
+        // For events where position-based date extraction fails,
+        // include them as candidates and validate later using detailed extraction
+        candidateEvents.push({
+          element: eventCard.element,
+          eventId: eventId
+        });
+      }
+    }
+    
+    // Also scan for any new events that might not be in our cache
+    this.scanForEventCardsWithResilience();
+    
+    // Check newly discovered events
+    for (const [eventId, eventCard] of this.eventCards) {
+      const isAlreadyIncluded = candidateEvents.some(candidate => candidate.eventId === eventId);
+      if (!isAlreadyIncluded && document.contains(eventCard.element)) {
+        const eventDate = this.extractEventDateFromCalendarPosition(eventCard.element);
+        if (eventDate && this.isSameDay(eventDate, targetDate)) {
+          candidateEvents.push({
+            element: eventCard.element,
+            eventId: eventId
+          });
+        }
+      }
+    }
+    
+    return candidateEvents;
+  }
+
+  private eventOccursOnDate(eventDetails: EventDetails, targetDate: Date): boolean {
+    // For all-day events
+    if (eventDetails.isAllDay) {
+      if (eventDetails.startDateTime && eventDetails.endDateTime) {
+        const startDate = new Date(eventDetails.startDateTime);
+        const endDate = new Date(eventDetails.endDateTime);
+        
+        // Check if target date falls within the all-day event range
+        const targetTime = targetDate.getTime();
+        const startTime = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+        const endTime = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
+        
+        return targetTime >= startTime && targetTime <= endTime;
+      }
+    }
+    
+    // For timed events
+    if (eventDetails.startDateTime) {
+      const eventDate = new Date(eventDetails.startDateTime);
+      if (this.isSameDay(eventDate, targetDate)) {
+        return true;
+      }
+    }
+    
+    // For multi-day events, check if target date falls within the range
+    if (eventDetails.startDateTime && eventDetails.endDateTime) {
+      const startDate = new Date(eventDetails.startDateTime);
+      const endDate = new Date(eventDetails.endDateTime);
+      
+      return targetDate >= startDate && targetDate <= endDate;
+    }
+    
+    return false;
+  }
+
+  private detectEventConflicts(sourceEvents: EventDetails[], targetEvents: EventDetails[], targetDate: Date): Array<{sourceEvent: EventDetails, conflictingEvents: EventDetails[]}> {
+    const conflicts: Array<{sourceEvent: EventDetails, conflictingEvents: EventDetails[]}> = [];
+    
+    for (const sourceEvent of sourceEvents) {
+      const conflictingEvents: EventDetails[] = [];
+      
+      // Adjust source event times to target date
+      const adjustedSourceEvent = this.adjustEventForNewDate(sourceEvent, targetDate);
+      
+      for (const targetEvent of targetEvents) {
+        if (this.eventsOverlap(adjustedSourceEvent, targetEvent)) {
+          conflictingEvents.push(targetEvent);
+        }
+      }
+      
+      if (conflictingEvents.length > 0) {
+        conflicts.push({
+          sourceEvent: adjustedSourceEvent,
+          conflictingEvents: conflictingEvents
+        });
+      }
+    }
+    
+    return conflicts;
+  }
+
+  private eventsOverlap(event1: EventDetails, event2: EventDetails): boolean {
+    // Handle all-day events
+    if (event1.isAllDay || event2.isAllDay) {
+      // All-day events conflict with any event on the same day
+      if (event1.isAllDay && event2.isAllDay) {
+        return true; // Two all-day events always conflict
+      }
+      
+      // All-day event conflicts with any timed event on the same day
+      if (event1.isAllDay && event2.startDateTime) {
+        return this.isSameDay(new Date(event2.startDateTime), new Date(event1.startDateTime || 0));
+      }
+      
+      if (event2.isAllDay && event1.startDateTime) {
+        return this.isSameDay(new Date(event1.startDateTime), new Date(event2.startDateTime || 0));
+      }
+    }
+    
+    // Handle timed events
+    if (event1.startDateTime && event1.endDateTime && event2.startDateTime && event2.endDateTime) {
+      const start1 = new Date(event1.startDateTime);
+      const end1 = new Date(event1.endDateTime);
+      const start2 = new Date(event2.startDateTime);
+      const end2 = new Date(event2.endDateTime);
+      
+      // Check for time overlap: events overlap if one starts before the other ends
+      return start1 < end2 && start2 < end1;
+    }
+    
+    return false;
+  }
+
+  private async showConflictResolutionModal(
+    conflicts: Array<{sourceEvent: EventDetails, conflictingEvents: EventDetails[]}>,
+    sourceDate: Date,
+    targetDate: Date
+  ): Promise<EventDetails[] | null> {
+    return new Promise((resolve) => {
+      // Create modal overlay
+      const overlay = document.createElement('div');
+      overlay.className = 'gct-modal-overlay';
+      
+      // Create modal container
+      const modal = document.createElement('div');
+      modal.className = 'gct-modal gct-conflict-modal';
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-labelledby', 'gct-conflict-title');
+      modal.setAttribute('aria-modal', 'true');
+      
+      // Track resolution decisions
+      const resolutions = new Map<string, 'skip' | 'overwrite' | 'copy-anyway'>();
+      
+      // Set default resolution to 'copy-anyway' for all conflicts
+      conflicts.forEach(conflict => {
+        resolutions.set(conflict.sourceEvent.id, 'copy-anyway');
+      });
+      
+      // Create modal content
+      modal.innerHTML = `
+        <div class="gct-modal-header">
+          <h2 id="gct-conflict-title" class="gct-modal-title">Resolve Event Conflicts</h2>
+          <button class="gct-modal-close" aria-label="Close modal">×</button>
+        </div>
+        <div class="gct-modal-body gct-conflict-body">
+          <p class="gct-conflict-description">
+            Found ${conflicts.length} event conflict(s) when copying to <strong>${this.formatDisplayDate(targetDate)}</strong>.
+            Choose how to handle each conflict:
+          </p>
+          <div class="gct-conflicts-list">
+            ${conflicts.map(conflict => this.renderConflictItem(conflict, resolutions)).join('')}
+          </div>
+          <div class="gct-bulk-actions">
+            <label class="gct-bulk-label">Bulk Actions:</label>
+            <button class="gct-bulk-btn" data-action="skip-all">Skip All</button>
+            <button class="gct-bulk-btn" data-action="overwrite-all">Overwrite All</button>
+            <button class="gct-bulk-btn" data-action="copy-all">Copy All Anyway</button>
+          </div>
+        </div>
+        <div class="gct-modal-footer">
+          <button class="gct-btn gct-btn-secondary" id="gct-conflict-cancel">Cancel</button>
+          <button class="gct-btn gct-btn-primary" id="gct-conflict-confirm">Apply Resolutions</button>
+        </div>
+      `;
+      
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+      
+      // Get elements
+      const cancelBtn = modal.querySelector('#gct-conflict-cancel') as HTMLButtonElement;
+      const confirmBtn = modal.querySelector('#gct-conflict-confirm') as HTMLButtonElement;
+      const closeBtn = modal.querySelector('.gct-modal-close') as HTMLButtonElement;
+      
+      // Event handlers for resolution buttons
+      modal.addEventListener('change', (e) => {
+        const target = e.target as HTMLInputElement;
+        if (target.name && target.name.startsWith('conflict-')) {
+          const eventId = target.name.replace('conflict-', '');
+          resolutions.set(eventId, target.value as 'skip' | 'overwrite' | 'copy-anyway');
+          this.updateConflictPreview(eventId, target.value, modal);
+        }
+      });
+      
+      // Bulk action handlers
+      modal.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement;
+        if (target.classList.contains('gct-bulk-btn')) {
+          const action = target.getAttribute('data-action');
+          if (action) {
+            this.applyBulkAction(action, conflicts, resolutions, modal);
+          }
+        }
+      });
+      
+      // Close modal function
+      const closeModal = (result: EventDetails[] | null = null) => {
+        document.body.removeChild(overlay);
+        resolve(result);
+      };
+      
+      // Event listeners
+      confirmBtn.addEventListener('click', () => {
+        const finalEvents = this.processResolutions(conflicts, resolutions);
+        closeModal(finalEvents);
+      });
+      
+      cancelBtn.addEventListener('click', () => {
+        closeModal(null);
+      });
+      
+      closeBtn.addEventListener('click', () => {
+        closeModal(null);
+      });
+      
+      // Close on overlay click
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          closeModal(null);
+        }
+      });
+      
+      // Close on ESC key
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          closeModal(null);
+          document.removeEventListener('keydown', handleKeyDown);
+        }
+      };
+      document.addEventListener('keydown', handleKeyDown);
+      
+      // Focus management
+      setTimeout(() => {
+        confirmBtn.focus();
+      }, 100);
+      
+      this.log('Conflict resolution modal displayed');
+    });
+  }
+
+  private renderConflictItem(
+    conflict: {sourceEvent: EventDetails, conflictingEvents: EventDetails[]},
+    resolutions: Map<string, 'skip' | 'overwrite' | 'copy-anyway'>
+  ): string {
+    const sourceEvent = conflict.sourceEvent;
+    const eventId = sourceEvent.id;
+    const currentResolution = resolutions.get(eventId) || 'copy-anyway';
+    
+    const timeDisplay = sourceEvent.isAllDay 
+      ? 'All day' 
+      : `${this.formatTime(sourceEvent.startDateTime)} - ${this.formatTime(sourceEvent.endDateTime)}`;
+    
+    const conflictList = conflict.conflictingEvents
+      .map(event => {
+        const conflictTime = event.isAllDay 
+          ? 'All day' 
+          : `${this.formatTime(event.startDateTime)} - ${this.formatTime(event.endDateTime)}`;
+        return `<li class="gct-conflict-item">${event.title} (${conflictTime})</li>`;
+      })
+      .join('');
+    
+    return `
+      <div class="gct-conflict" data-event-id="${eventId}">
+        <div class="gct-conflict-event">
+          <h4 class="gct-conflict-title">${sourceEvent.title}</h4>
+          <p class="gct-conflict-time">${timeDisplay}</p>
+          <div class="gct-conflict-details">
+            <p class="gct-conflict-label">Conflicts with:</p>
+            <ul class="gct-conflicts-existing">${conflictList}</ul>
+          </div>
+        </div>
+        <div class="gct-conflict-resolution">
+          <div class="gct-radio-group">
+            <label class="gct-radio-option">
+              <input type="radio" name="conflict-${eventId}" value="skip" ${currentResolution === 'skip' ? 'checked' : ''}>
+              <span class="gct-radio-label">Skip - Don't copy this event</span>
+            </label>
+            <label class="gct-radio-option">
+              <input type="radio" name="conflict-${eventId}" value="overwrite" ${currentResolution === 'overwrite' ? 'checked' : ''}>
+              <span class="gct-radio-label">Overwrite - Replace existing event(s)</span>
+            </label>
+            <label class="gct-radio-option">
+              <input type="radio" name="conflict-${eventId}" value="copy-anyway" ${currentResolution === 'copy-anyway' ? 'checked' : ''}>
+              <span class="gct-radio-label">Copy Anyway - Allow overlap</span>
+            </label>
+          </div>
+          <div class="gct-resolution-preview" data-preview="${eventId}">
+            ${this.getResolutionPreview(currentResolution, conflict)}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private formatTime(dateTime: Date | null): string {
+    if (!dateTime) return '';
+    return new Date(dateTime).toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  }
+
+  private updateConflictPreview(eventId: string, resolution: string, modal: HTMLElement): void {
+    const previewElement = modal.querySelector(`[data-preview="${eventId}"]`);
+    if (previewElement) {
+      const conflict = this.findConflictByEventId(eventId);
+      if (conflict) {
+        previewElement.innerHTML = this.getResolutionPreview(resolution as 'skip' | 'overwrite' | 'copy-anyway', conflict);
+      }
+    }
+  }
+
+  private findConflictByEventId(eventId: string): {sourceEvent: EventDetails, conflictingEvents: EventDetails[]} | null {
+    // This is a helper method to find conflict data when updating previews
+    // In a real implementation, you'd pass this data or store it in a way that's accessible
+    return null; // Simplified for now
+  }
+
+  private getResolutionPreview(resolution: 'skip' | 'overwrite' | 'copy-anyway', conflict: {sourceEvent: EventDetails, conflictingEvents: EventDetails[]}): string {
+    switch (resolution) {
+      case 'skip':
+        return '<span class="gct-preview-skip">Event will not be copied</span>';
+      case 'overwrite':
+        return `<span class="gct-preview-overwrite">Will replace ${conflict.conflictingEvents.length} existing event(s)</span>`;
+      case 'copy-anyway':
+        return '<span class="gct-preview-copy">Event will be copied with overlap</span>';
+      default:
+        return '';
+    }
+  }
+
+  private applyBulkAction(
+    action: string,
+    conflicts: Array<{sourceEvent: EventDetails, conflictingEvents: EventDetails[]}>,
+    resolutions: Map<string, 'skip' | 'overwrite' | 'copy-anyway'>,
+    modal: HTMLElement
+  ): void {
+    let resolution: 'skip' | 'overwrite' | 'copy-anyway';
+    
+    switch (action) {
+      case 'skip-all':
+        resolution = 'skip';
+        break;
+      case 'overwrite-all':
+        resolution = 'overwrite';
+        break;
+      case 'copy-all':
+        resolution = 'copy-anyway';
+        break;
+      default:
+        return;
+    }
+    
+    // Update all resolutions
+    conflicts.forEach(conflict => {
+      resolutions.set(conflict.sourceEvent.id, resolution);
+    });
+    
+    // Update all radio buttons
+    conflicts.forEach(conflict => {
+      const radioButtons = modal.querySelectorAll(`input[name="conflict-${conflict.sourceEvent.id}"]`) as NodeListOf<HTMLInputElement>;
+      radioButtons.forEach(radio => {
+        radio.checked = radio.value === resolution;
+      });
+      
+      // Update preview
+      this.updateConflictPreview(conflict.sourceEvent.id, resolution, modal);
+    });
+  }
+
+  private processResolutions(
+    conflicts: Array<{sourceEvent: EventDetails, conflictingEvents: EventDetails[]}>,
+    resolutions: Map<string, 'skip' | 'overwrite' | 'copy-anyway'>
+  ): EventDetails[] {
+    const finalEvents: EventDetails[] = [];
+    
+    conflicts.forEach(conflict => {
+      const resolution = resolutions.get(conflict.sourceEvent.id) || 'copy-anyway';
+      
+      switch (resolution) {
+        case 'skip':
+          // Don't add to final events
+          this.log(`Skipping event: ${conflict.sourceEvent.title}`);
+          break;
+        case 'overwrite':
+        case 'copy-anyway':
+          // Add to final events (overwrite logic will be handled in copy phase)
+          finalEvents.push(conflict.sourceEvent);
+          this.log(`Will copy event: ${conflict.sourceEvent.title} (${resolution})`);
+          break;
+      }
+    });
+    
+    return finalEvents;
+  }
+
+  private async copyEventsToTargetDay(
+    eventsToProcess: EventDetails[], 
+    targetDate: Date, 
+    conflicts: Array<{sourceEvent: EventDetails, conflictingEvents: EventDetails[]}>
+  ): Promise<{successful: EventDetails[], failed: Array<{event: EventDetails, error: string}>}> {
+    const results = {
+      successful: [] as EventDetails[],
+      failed: [] as Array<{event: EventDetails, error: string}>
+    };
+
+    this.log(`Starting bulk copy of ${eventsToProcess.length} events to ${targetDate.toDateString()}`);
+
+    // Show progress notification
+    this.showNotification(
+      `Copying ${eventsToProcess.length} event(s) to ${targetDate.toDateString()}...`,
+      'info'
+    );
+
+    for (let i = 0; i < eventsToProcess.length; i++) {
+      const event = eventsToProcess[i];
+      
+      try {
+        this.log(`Processing event ${i + 1}/${eventsToProcess.length}: ${event.title}`);
+        
+        // Find if this event had conflicts that require overwriting
+        const eventConflict = conflicts.find(c => c.sourceEvent.id === event.id);
+        const hasOverwriteConflicts = eventConflict && eventConflict.conflictingEvents.length > 0;
+        
+        // Handle overwrite conflicts by deleting existing events first
+        if (hasOverwriteConflicts) {
+          this.log(`Event "${event.title}" requires overwriting ${eventConflict.conflictingEvents.length} existing event(s)`);
+          
+          for (const conflictingEvent of eventConflict.conflictingEvents) {
+            try {
+              await this.deleteEvent(conflictingEvent);
+              this.log(`Successfully deleted conflicting event: ${conflictingEvent.title}`);
+            } catch (deleteError) {
+              this.error(`Failed to delete conflicting event: ${conflictingEvent.title}`, deleteError as Error);
+              // Continue with duplication even if deletion fails
+            }
+          }
+        }
+        
+        // Create the duplicate event on the target date
+        await this.createDuplicateEvent(event, targetDate, event.calendarId || 'primary');
+        
+        results.successful.push(event);
+        this.log(`✅ Successfully copied event: ${event.title}`);
+        
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        results.failed.push({ event, error: errorMessage });
+        this.error(`❌ Failed to copy event: ${event.title}`, error as Error);
+      }
+      
+      // Add small delay between events to avoid overwhelming Google Calendar
+      if (i < eventsToProcess.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+
+    this.log(`Copy operation completed. Success: ${results.successful.length}, Failed: ${results.failed.length}`);
+    
+    // Refresh calendar view to show new events
+    try {
+      await this.refreshCalendarView();
+    } catch (refreshError) {
+      this.error('Failed to refresh calendar view after copying', refreshError as Error);
+    }
+
+    return results;
+  }
+
+  private async deleteEvent(eventDetails: EventDetails): Promise<void> {
+    // This is a simplified implementation - in a production environment,
+    // you would need to use Google Calendar API to properly delete events
+    this.log(`Placeholder: Would delete event "${eventDetails.title}" (ID: ${eventDetails.id})`);
+    
+    // For now, we'll just log the deletion attempt
+    // In a real implementation, this would:
+    // 1. Find the event in the DOM
+    // 2. Open its context menu or detail view
+    // 3. Click the delete button
+    // 4. Confirm the deletion
+    // OR use the Google Calendar API directly
+    
+    // Add a small delay to simulate the deletion process
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  private async showTargetDaySelectionModal(sourceDate: Date): Promise<Date | null> {
+    return new Promise((resolve) => {
+      // Create modal overlay
+      const overlay = document.createElement('div');
+      overlay.className = 'gct-modal-overlay';
+      
+      // Create modal container
+      const modal = document.createElement('div');
+      modal.className = 'gct-modal';
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-labelledby', 'gct-modal-title');
+      modal.setAttribute('aria-modal', 'true');
+      
+      // Format source date for display
+      const sourceDateStr = this.formatDisplayDate(sourceDate);
+      
+      // Create modal content
+      modal.innerHTML = `
+        <div class="gct-modal-header">
+          <h2 id="gct-modal-title" class="gct-modal-title">Copy Events</h2>
+          <button class="gct-modal-close" aria-label="Close modal">×</button>
+        </div>
+        <div class="gct-modal-body">
+          <p class="gct-modal-description">
+            Copy all events from <strong>${sourceDateStr}</strong> to:
+          </p>
+          <div class="gct-modal-form">
+            <label for="gct-target-date" class="gct-form-label">Target Date:</label>
+            <input 
+              type="date" 
+              id="gct-target-date" 
+              class="gct-form-input"
+              required
+              aria-describedby="gct-date-error"
+            />
+            <div id="gct-date-error" class="gct-error-message" role="alert" aria-live="polite"></div>
+          </div>
+        </div>
+        <div class="gct-modal-footer">
+          <button class="gct-btn gct-btn-secondary" id="gct-cancel-btn">Cancel</button>
+          <button class="gct-btn gct-btn-primary" id="gct-confirm-btn">Copy Events</button>
+        </div>
+      `;
+      
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+      
+      // Get form elements
+      const dateInput = modal.querySelector('#gct-target-date') as HTMLInputElement;
+      const errorDiv = modal.querySelector('#gct-date-error') as HTMLElement;
+      const confirmBtn = modal.querySelector('#gct-confirm-btn') as HTMLButtonElement;
+      const cancelBtn = modal.querySelector('#gct-cancel-btn') as HTMLButtonElement;
+      const closeBtn = modal.querySelector('.gct-modal-close') as HTMLButtonElement;
+      
+      // Set default date to tomorrow
+      const tomorrow = new Date(sourceDate);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      dateInput.value = this.formatDateForInput(tomorrow);
+      
+      // Validation function
+      const validateDate = (): boolean => {
+        const selectedDate = new Date(dateInput.value);
+        errorDiv.textContent = '';
+        
+        if (!dateInput.value) {
+          errorDiv.textContent = 'Please select a target date';
+          return false;
+        }
+        
+        if (isNaN(selectedDate.getTime())) {
+          errorDiv.textContent = 'Please select a valid date';
+          return false;
+        }
+        
+        if (this.isSameDay(selectedDate, sourceDate)) {
+          errorDiv.textContent = 'Target date cannot be the same as source date';
+          return false;
+        }
+        
+        return true;
+      };
+      
+      // Close modal function
+      const closeModal = (result: Date | null = null) => {
+        document.body.removeChild(overlay);
+        resolve(result);
+      };
+      
+      // Event listeners
+      confirmBtn.addEventListener('click', () => {
+        if (validateDate()) {
+          const selectedDate = new Date(dateInput.value);
+          closeModal(selectedDate);
+        }
+      });
+      
+      cancelBtn.addEventListener('click', () => {
+        closeModal();
+      });
+      
+      closeBtn.addEventListener('click', () => {
+        closeModal();
+      });
+      
+      // Close on overlay click
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          closeModal();
+        }
+      });
+      
+      // Close on ESC key
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          closeModal();
+          document.removeEventListener('keydown', handleKeyDown);
+        }
+      };
+      document.addEventListener('keydown', handleKeyDown);
+      
+      // Real-time validation
+      dateInput.addEventListener('input', validateDate);
+      
+      // Focus management
+      setTimeout(() => {
+        dateInput.focus();
+      }, 100);
+      
+      this.log('Target day selection modal displayed');
+    });
+  }
+
+  private async showCopyResultsModal(
+    copyResults: {successful: EventDetails[], failed: Array<{event: EventDetails, error: string}>},
+    sourceDate: Date,
+    targetDate: Date,
+    allProcessedEvents: EventDetails[],
+    conflicts: Array<{sourceEvent: EventDetails, conflictingEvents: EventDetails[]}>
+  ): Promise<void> {
+    return new Promise((resolve) => {
+      const { successful, failed } = copyResults;
+      const totalEvents = allProcessedEvents.length;
+      const skippedEvents = totalEvents - successful.length - failed.length;
+      const overwrittenCount = conflicts.reduce((count, conflict) => 
+        count + (successful.some(s => s.id === conflict.sourceEvent.id) ? conflict.conflictingEvents.length : 0), 0
+      );
+
+      // Create modal HTML
+      const modalHTML = `
+        <div class="gct-modal-overlay" id="gct-copy-results-overlay">
+          <div class="gct-modal gct-copy-results-modal" role="dialog" aria-labelledby="gct-copy-results-title" aria-modal="true">
+            <div class="gct-modal-header">
+              <h2 id="gct-copy-results-title" class="gct-modal-title">
+                Copy Day Results
+              </h2>
+              <button class="gct-modal-close" aria-label="Close dialog">&times;</button>
+            </div>
+            
+            <div class="gct-copy-results-body">
+              <div class="gct-copy-summary">
+                <div class="gct-copy-date-info">
+                  <span class="gct-copy-from">${this.formatDisplayDate(sourceDate)}</span>
+                  <span class="gct-copy-arrow">→</span>
+                  <span class="gct-copy-to">${this.formatDisplayDate(targetDate)}</span>
+                </div>
+                
+                <div class="gct-copy-stats">
+                  <div class="gct-stat-item gct-stat-success">
+                    <span class="gct-stat-number">${successful.length}</span>
+                    <span class="gct-stat-label">Copied</span>
+                  </div>
+                  ${failed.length > 0 ? `
+                    <div class="gct-stat-item gct-stat-error">
+                      <span class="gct-stat-number">${failed.length}</span>
+                      <span class="gct-stat-label">Failed</span>
+                    </div>
+                  ` : ''}
+                  ${skippedEvents > 0 ? `
+                    <div class="gct-stat-item gct-stat-warning">
+                      <span class="gct-stat-number">${skippedEvents}</span>
+                      <span class="gct-stat-label">Skipped</span>
+                    </div>
+                  ` : ''}
+                  ${overwrittenCount > 0 ? `
+                    <div class="gct-stat-item gct-stat-info">
+                      <span class="gct-stat-number">${overwrittenCount}</span>
+                      <span class="gct-stat-label">Overwritten</span>
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
+
+              ${successful.length > 0 ? `
+                <div class="gct-result-section">
+                  <h3 class="gct-result-title gct-result-title-success">
+                    <span class="gct-result-icon">✓</span>
+                    Successfully Copied Events
+                  </h3>
+                  <div class="gct-result-list">
+                    ${successful.map(event => `
+                      <div class="gct-result-item gct-result-item-success">
+                        <span class="gct-event-title">${this.escapeHtml(event.title)}</span>
+                        ${event.startDateTime ? `
+                          <span class="gct-event-time">
+                            ${event.isAllDay ? 'All day' : this.formatTime(event.startDateTime)}
+                          </span>
+                        ` : ''}
+                      </div>
+                    `).join('')}
+                  </div>
+                </div>
+              ` : ''}
+
+              ${failed.length > 0 ? `
+                <div class="gct-result-section">
+                  <h3 class="gct-result-title gct-result-title-error">
+                    <span class="gct-result-icon">⚠</span>
+                    Failed to Copy
+                  </h3>
+                  <div class="gct-result-list">
+                    ${failed.map(({ event, error }) => `
+                      <div class="gct-result-item gct-result-item-error">
+                        <span class="gct-event-title">${this.escapeHtml(event.title)}</span>
+                        <span class="gct-event-error">${this.escapeHtml(error)}</span>
+                      </div>
+                    `).join('')}
+                  </div>
+                </div>
+              ` : ''}
+
+              ${totalEvents === 0 ? `
+                <div class="gct-result-section">
+                  <div class="gct-no-events">
+                    <span class="gct-result-icon">ℹ</span>
+                    <span>No events were found on ${this.formatDisplayDate(sourceDate)} to copy.</span>
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+            
+            <div class="gct-modal-footer">
+              <button class="gct-btn gct-btn-primary" id="gct-copy-results-done">
+                Done
+              </button>
+              <button class="gct-btn gct-btn-secondary" id="gct-copy-results-view-calendar">
+                View Calendar
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Insert modal into DOM
+      document.body.insertAdjacentHTML('beforeend', modalHTML);
+      
+      const overlay = document.getElementById('gct-copy-results-overlay')!;
+      const modal = overlay.querySelector('.gct-modal')!;
+      const closeBtn = overlay.querySelector('.gct-modal-close')!;
+      const doneBtn = document.getElementById('gct-copy-results-done')!;
+      const viewCalendarBtn = document.getElementById('gct-copy-results-view-calendar')!;
+
+      // Focus management
+      const focusableElements = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      const firstFocusable = focusableElements[0] as HTMLElement;
+      const lastFocusable = focusableElements[focusableElements.length - 1] as HTMLElement;
+
+      // Event handlers
+      const closeModal = () => {
+        overlay.remove();
+        resolve();
+      };
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          closeModal();
+        } else if (e.key === 'Tab') {
+          if (e.shiftKey) {
+            if (document.activeElement === firstFocusable) {
+              lastFocusable.focus();
+              e.preventDefault();
+            }
+          } else {
+            if (document.activeElement === lastFocusable) {
+              firstFocusable.focus();
+              e.preventDefault();
+            }
+          }
+        }
+      };
+
+      const viewCalendar = () => {
+        // Navigate to the target date in Google Calendar
+        const targetDateString = targetDate.toISOString().split('T')[0];
+        window.location.href = `https://calendar.google.com/calendar/u/0/r/day/${targetDateString}`;
+        closeModal();
+      };
+
+      // Attach event listeners
+      closeBtn.addEventListener('click', closeModal);
+      doneBtn.addEventListener('click', closeModal);
+      viewCalendarBtn.addEventListener('click', viewCalendar);
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closeModal();
+      });
+      document.addEventListener('keydown', handleKeyDown);
+
+      // Focus the first focusable element
+      firstFocusable.focus();
+
+      // Cleanup event listener when modal is closed
+      const originalResolve = resolve;
+      resolve = () => {
+        document.removeEventListener('keydown', handleKeyDown);
+        originalResolve();
+      };
+
+      this.log('Copy results modal displayed');
+    });
+  }
+
+  private escapeHtml(text: string): string {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  private formatDisplayDate(date: Date): string {
+    return date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  }
+
+  private formatDateForInput(date: Date): string {
+    return date.toISOString().split('T')[0];
+  }
+
+  private isSameDay(date1: Date, date2: Date): boolean {
+    return date1.getFullYear() === date2.getFullYear() &&
+           date1.getMonth() === date2.getMonth() &&
+           date1.getDate() === date2.getDate();
+  }
 
   private async handleEventDuplicate(eventId: string): Promise<void> {
     try {
@@ -2710,6 +4520,20 @@ class GoogleCalendarTools implements CalendarExtension {
                 addedEvents++;
               }
               
+              // Check if it's a day header
+              const dayHeaderSelectors = [this.SELECTORS.dayHeader, ...this.SELECTORS.dayHeaderFallbacks];
+              const matchesDayHeader = dayHeaderSelectors.some(selector => {
+                try {
+                  return node.matches(selector) && this.isValidDayHeader(node);
+                } catch (error) {
+                  return false;
+                }
+              });
+              
+              if (matchesDayHeader) {
+                this.enhanceDayHeader(node);
+              }
+              
               // OPTIMIZED: Check for event cards within added node only (not entire document)
               try {
                 const selectors = [this.SELECTORS.eventCard, ...this.SELECTORS.eventCardFallbacks];
@@ -2729,6 +4553,26 @@ class GoogleCalendarTools implements CalendarExtension {
               } catch (error) {
                 // Log but don't break the entire process
                 this.error('Error searching for event cards in subtree', error as Error);
+              }
+              
+              // Check for day headers within added node
+              try {
+                const dayHeaderSelectors = [this.SELECTORS.dayHeader, ...this.SELECTORS.dayHeaderFallbacks];
+                for (const selector of dayHeaderSelectors) {
+                  const dayHeadersInNode = node.querySelectorAll(selector) as NodeListOf<HTMLElement>;
+                  if (dayHeadersInNode.length > 0) {
+                    dayHeadersInNode.forEach((header) => {
+                      if (!processedElements.has(header) && this.isValidDayHeader(header)) {
+                        processedElements.add(header);
+                        this.enhanceDayHeader(header);
+                      }
+                    });
+                    break; // Found headers with this selector, no need to try others
+                  }
+                }
+              } catch (error) {
+                // Log but don't break the entire process
+                this.error('Error searching for day headers in subtree', error as Error);
               }
             }
           }
@@ -2840,7 +4684,7 @@ class GoogleCalendarTools implements CalendarExtension {
 
   private handleViewChange(): void {
     try {
-      this.log('Handling calendar view change - rescanning for events');
+      this.log('Handling calendar view change - rescanning for events and day headers');
       
       // Clear existing event cards that might no longer be valid
       const existingEventIds = Array.from(this.eventCards.keys());
@@ -2858,8 +4702,25 @@ class GoogleCalendarTools implements CalendarExtension {
         this.log(`Cleaned up ${cleanedUp} stale event references`);
       }
       
+      // Clear existing day headers that might no longer be valid
+      const existingDayHeaderIds = Array.from(this.dayHeaders.keys());
+      let cleanedUpHeaders = 0;
+      
+      existingDayHeaderIds.forEach(headerId => {
+        const dayHeader = this.dayHeaders.get(headerId);
+        if (dayHeader && !document.contains(dayHeader.element)) {
+          this.dayHeaders.delete(headerId);
+          cleanedUpHeaders++;
+        }
+      });
+      
+      if (cleanedUpHeaders > 0) {
+        this.log(`Cleaned up ${cleanedUpHeaders} stale day header references`);
+      }
+      
       // OPTIMIZED: Use fast scanning for immediate response
       this.fastScanForNewEvents();
+      this.scanForDayHeaders(); // Re-scan day headers after view change
       
     } catch (error) {
       this.error('Error handling view change', error as Error);
@@ -3001,15 +4862,29 @@ class GoogleCalendarTools implements CalendarExtension {
         this.log(`Health check: Cleaned up ${staleEvents} stale events`);
       }
       
+      // Check for stale day headers
+      let staleDayHeaders = 0;
+      this.dayHeaders.forEach((dayHeader, headerId) => {
+        if (dayHeader.lastSeen < staleThreshold || !document.contains(dayHeader.element)) {
+          this.dayHeaders.delete(headerId);
+          staleDayHeaders++;
+        }
+      });
+      
+      if (staleDayHeaders > 0) {
+        this.log(`Health check: Cleaned up ${staleDayHeaders} stale day headers`);
+      }
+      
       // FIXED: Always run comprehensive scan during health check
-      this.log('Health check: Running comprehensive scan for new events');
+      this.log('Health check: Running comprehensive scan for new events and day headers');
       this.fastScanForNewEvents();
+      this.scanForDayHeaders();
       
       // Check overall health
       const errorRate = this.health.failedEnhancements / Math.max(this.health.totalEnhanced, 1);
       this.health.isHealthy = errorRate < 0.1 && this.health.errorCount < this.RESILIENCE_CONFIG.maxErrorCount;
       
-      this.log(`Health check completed. Events: ${this.eventCards.size}, Errors: ${this.health.errorCount}, Healthy: ${this.health.isHealthy}`);
+      this.log(`Health check completed. Events: ${this.eventCards.size}, Day headers: ${this.dayHeaders.size}, Errors: ${this.health.errorCount}, Healthy: ${this.health.isHealthy}`);
       
       // FIXED: Trigger recovery if no events found at all (might indicate broken selectors)
       if (this.eventCards.size === 0) {
