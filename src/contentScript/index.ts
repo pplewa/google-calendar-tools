@@ -396,9 +396,8 @@ class GoogleCalendarTools implements CalendarExtension {
       
       /* Toast notification styles */
       .gct-toast {
-        transform: translateX(100%);
-        opacity: 0;
-        transition: all 0.3s ease-out;
+        transform: translateX(0);
+        opacity: 1;
       }
       
       .gct-toast__icon {
@@ -444,22 +443,22 @@ class GoogleCalendarTools implements CalendarExtension {
       
       /* Toast animations */
       @keyframes gct-toast-slide-in {
-        from {
+        0% {
           transform: translateX(100%);
           opacity: 0;
         }
-        to {
+        100% {
           transform: translateX(0);
           opacity: 1;
         }
       }
       
       @keyframes gct-toast-slide-out {
-        from {
+        0% {
           transform: translateX(0);
           opacity: 1;
         }
-        to {
+        100% {
           transform: translateX(100%);
           opacity: 0;
         }
@@ -2453,11 +2452,17 @@ class GoogleCalendarTools implements CalendarExtension {
     // Add to DOM
     document.body.appendChild(toast);
     
-    // Auto-remove after duration (with different durations based on type)
-    const duration = type === 'error' ? 5000 : type === 'success' ? 3000 : 2500;
+    // Auto-remove after longer duration so user can actually read them
+    const duration = type === 'error' ? 8000 : type === 'success' ? 6000 : 5000;
     setTimeout(() => {
       if (toast.parentElement) {
-        toast.remove();
+        // Add slide-out animation before removing
+        toast.style.animation = 'gct-toast-slide-out 0.3s ease-out forwards';
+        setTimeout(() => {
+          if (toast.parentElement) {
+            toast.remove();
+          }
+        }, 300);
       }
     }, duration);
     
@@ -2485,7 +2490,13 @@ class GoogleCalendarTools implements CalendarExtension {
     closeBtn.innerHTML = '×';
     closeBtn.addEventListener('click', () => {
       if (toast.parentElement) {
-        toast.remove();
+        // Add slide-out animation before removing
+        toast.style.animation = 'gct-toast-slide-out 0.3s ease-out forwards';
+        setTimeout(() => {
+          if (toast.parentElement) {
+            toast.remove();
+          }
+        }, 300);
       }
     });
     
@@ -2494,7 +2505,7 @@ class GoogleCalendarTools implements CalendarExtension {
     toast.appendChild(messageEl);
     toast.appendChild(closeBtn);
     
-    // Add animation classes
+    // Style and position the toast
     toast.style.cssText = `
       position: fixed;
       top: 20px;
@@ -2513,8 +2524,9 @@ class GoogleCalendarTools implements CalendarExtension {
       gap: 8px;
       max-width: 400px;
       word-wrap: break-word;
-      animation: gct-toast-slide-in 0.3s ease-out;
       border-left: 4px solid ${this.getToastAccentColor(type)};
+      transform: translateX(100%);
+      opacity: 0;
     `;
     
     // Position multiple toasts properly
@@ -2523,6 +2535,11 @@ class GoogleCalendarTools implements CalendarExtension {
       const offset = existingToasts.length * 70; // 70px spacing between toasts
       toast.style.top = `${20 + offset}px`;
     }
+    
+    // Trigger slide-in animation after DOM insertion
+    requestAnimationFrame(() => {
+      toast.style.animation = 'gct-toast-slide-in 0.4s ease-out forwards';
+    });
     
     return toast;
   }
