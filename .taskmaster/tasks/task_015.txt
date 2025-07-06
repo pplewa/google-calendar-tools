@@ -1,0 +1,40 @@
+# Task ID: 15
+# Title: Implement Background Script Architecture for Bulk Operations
+# Status: pending
+# Dependencies: 13, 2
+# Priority: medium
+# Description: Move heavy API calls and bulk processing to background script to keep UI responsive, implementing message passing between content script and background script with progress tracking and error handling.
+# Details:
+Implement a robust background script architecture to handle computationally intensive operations and maintain UI responsiveness during bulk operations. Key implementation steps:
+
+1. **Background Script Setup**: Create a dedicated background script (background.js) with service worker architecture for Manifest V3 compatibility. Register message listeners for bulk operation requests and implement proper lifecycle management.
+
+2. **Message Passing System**: Establish bidirectional communication between content script (UI) and background script using Chrome's runtime.sendMessage and runtime.onMessage APIs. Define message schemas for different operation types (BULK_COPY, BULK_DELETE, PROGRESS_UPDATE, ERROR_REPORT, OPERATION_COMPLETE).
+
+3. **Operation Queue Management**: Implement a queue system in the background script to handle multiple concurrent bulk operations. Use a priority-based queue with operation types, timestamps, and user context to manage execution order.
+
+4. **Progress Tracking Infrastructure**: Create a progress tracking system that reports completion percentages, processed item counts, and estimated time remaining. Implement progress callbacks that send updates to the UI every 100ms or after processing batches of 10 events.
+
+5. **State Synchronization**: Maintain operation state across content script reloads and tab switches. Store operation progress in chrome.storage.local and implement state recovery mechanisms for interrupted operations.
+
+6. **Error Handling and Retry Logic**: Implement comprehensive error handling with exponential backoff retry logic for API failures. Categorize errors (network, authentication, rate limiting, validation) and implement appropriate recovery strategies.
+
+7. **API Rate Limiting**: Implement intelligent rate limiting to respect Google Calendar API quotas (10,000 requests per 100 seconds per user). Use token bucket algorithm with dynamic adjustment based on API response headers.
+
+8. **Memory Management**: Implement efficient memory usage patterns for large datasets, processing events in chunks of 100-200 items to prevent memory exhaustion during bulk operations.
+
+Example message structure:
+```typescript
+interface BulkOperationMessage {
+  type: 'BULK_COPY' | 'PROGRESS_UPDATE' | 'OPERATION_COMPLETE';
+  operationId: string;
+  data: {
+    events?: CalendarEvent[];
+    progress?: { completed: number; total: number; percentage: number };
+    error?: { code: string; message: string; retryable: boolean };
+  };
+}
+```
+
+# Test Strategy:
+Comprehensive testing approach: 1) Test message passing reliability by sending 1000+ messages between content and background scripts and verifying 100% delivery rate, 2) Verify progress tracking accuracy by monitoring bulk copy operations of 500+ events and confirming progress updates match actual completion, 3) Test error handling by simulating API failures, network interruptions, and rate limiting scenarios to ensure proper recovery and user notification, 4) Validate state synchronization by interrupting operations mid-process (tab refresh, browser restart) and verifying operations resume correctly, 5) Performance test UI responsiveness during bulk operations by monitoring main thread blocking and ensuring UI remains interactive, 6) Test concurrent operation handling by initiating multiple bulk operations simultaneously and verifying proper queue management and resource allocation, 7) Verify memory usage remains stable during processing of 1000+ events without memory leaks or excessive consumption.

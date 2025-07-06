@@ -1,43 +1,107 @@
-# google-calendar-tools
+# Google Calendar Tools
 
-> a chrome extension tools built with Vite + Vanilla, and Manifest v3
+Enhance Google Calendar with powerful productivity tools: duplicate events, copy entire days, batch operations, and quick duration adjustments.
 
-## Installing
+## Features
 
-1. Check if your `Node.js` version is >= **14**.
-2. Change or configurate the name of your extension on `src/manifest`.
-3. Run `npm install` to install the dependencies.
+- **Duplicate Events**: Quick "Duplicate to Tomorrow" button for any event
+- **Copy Day**: Copy all events from one day to another with conflict resolution
+- **Bulk Operations**: Select and copy multiple events at once
+- **Quick Duration Controls**: Adjust event duration with +/-15 min buttons
+- **Seamless Integration**: UI elements that blend naturally with Google Calendar
 
-## Developing
+## Google Calendar API Setup
 
-run the command
+To use the bulk operations and API-powered features, you need to configure Google Calendar API access:
 
-```shell
-$ cd google-calendar-tools
+### 1. Google Cloud Console Setup
 
-$ npm run dev
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select an existing one
+3. Enable the **Google Calendar API**:
+   - Navigate to "APIs & Services" > "Library"
+   - Search for "Google Calendar API" 
+   - Click "Enable"
+
+### 2. OAuth2 Credentials
+
+1. Go to "APIs & Services" > "Credentials"
+2. Click "Create Credentials" > "OAuth 2.0 Client IDs"
+3. Configure OAuth consent screen (if prompted):
+   - Set application name: "Google Calendar Tools"
+   - Add your email as test user
+   - Add scopes: `https://www.googleapis.com/auth/calendar`
+4. Create OAuth 2.0 Client ID:
+   - Application type: **Chrome Extension**
+   - Name: "Google Calendar Tools Extension"
+   - Copy the generated **Client ID**
+
+### 3. Extension Configuration
+
+1. Copy the environment template:
+   ```bash
+   cp .env.example .env
+   ```
+2. Open `.env` file and replace the placeholder with your actual Client ID:
+   ```bash
+   VITE_GOOGLE_CLIENT_ID=your-actual-client-id.apps.googleusercontent.com
+   ```
+3. Rebuild the extension: `npm run build`
+
+> **Note**: The `.env` file is excluded from version control for security. Never commit your actual OAuth2 credentials to the repository.
+
+### 4. Extension ID Setup
+
+After loading the extension in Chrome:
+
+1. Go to `chrome://extensions/`
+2. Find your extension and copy its **Extension ID**
+3. Return to Google Cloud Console > Credentials
+4. Edit your OAuth 2.0 Client ID
+5. Under "Authorized JavaScript origins", add:
+   ```
+   chrome-extension://YOUR_EXTENSION_ID
+   ```
+
+## Development
+
+```bash
+# Install dependencies
+npm install
+
+# Development build with hot reload
+npm run dev
+
+# Production build
+npm run build
+
+# Load the extension in Chrome:
+# 1. Go to chrome://extensions/
+# 2. Enable "Developer mode"
+# 3. Click "Load unpacked" and select the 'build' folder
 ```
 
-### Chrome Extension Developer Mode
+## Architecture
 
-1. set your Chrome browser 'Developer mode' up
-2. click 'Load unpacked', and select `google-calendar-tools/build` folder
+- **Content Script**: UI injection and DOM manipulation
+- **Background Script**: OAuth2 authentication and Google Calendar API operations
+- **Batch Operations**: Efficient bulk processing using Calendar API batch endpoints
 
-### Nomal FrontEnd Developer Mode
+## Permissions
 
-1. access `http://0.0.0.0:3000/`
-2. when debugging popup page, open `http://0.0.0.0:3000//popup.html`
-3. when debugging options page, open `http://0.0.0.0:3000//options.html`
+- `storage`: Store user preferences and cache
+- `activeTab`: Access current tab for UI injection
+- `identity`: OAuth2 authentication with Google
+- `https://www.googleapis.com/*`: Google Calendar API access
+- `https://calendar.google.com/*`: Google Calendar page access
 
-## Packing
+## Privacy
 
-After the development of your extension run the command
+This extension only accesses your Google Calendar data with your explicit permission. All API calls are made directly to Google's servers. No data is sent to third parties.
 
-```shell
-$ npm run build
-```
+## License
 
-Now, the content of `build` folder will be the extension ready to be submitted to the Chrome Web Store. Just take a look at the [official guide](https://developer.chrome.com/webstore/publish) to more infos about publishing.
+MIT License - see LICENSE file for details.
 
 ---
 

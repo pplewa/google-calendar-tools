@@ -1,0 +1,23 @@
+# Task ID: 14
+# Title: Implement Fast DOM-Based Event Extraction Fallback
+# Status: pending
+# Dependencies: 2, 9, 13
+# Priority: medium
+# Description: Create efficient DOM scraping from event cards without opening popovers as fallback when API is unavailable, extracting visible data directly from calendar grid for speed.
+# Details:
+Implement a lightweight DOM-based event extraction system as a fallback mechanism when the Google Calendar API is unavailable or fails. Key implementation steps:
+
+1. **Direct DOM Event Extraction**: Create selectors to extract visible event data directly from calendar grid elements without triggering popover interactions. Target data includes: event title (from card text), time information (from time labels), basic visual indicators (color, calendar assignment), and event duration (calculated from card positioning).
+
+2. **Efficient Data Parsing**: Implement parsing logic to extract structured data from DOM elements using CSS selectors and text parsing. Handle different calendar views (month, week, day) with view-specific extraction strategies. Use caching to avoid re-parsing unchanged DOM elements.
+
+3. **Minimal Popover Strategy**: For critical missing data that cannot be extracted from visible elements, implement a selective popover opening mechanism that only opens popovers when absolutely necessary (e.g., for detailed descriptions or attendee information). Batch popover requests to minimize performance impact.
+
+4. **Fallback Detection Logic**: Create a detection system that determines when to use DOM extraction vs API calls. Monitor API availability, rate limits, and authentication status. Automatically switch to DOM extraction when API calls fail or are unavailable.
+
+5. **Performance Optimization**: Implement debouncing for DOM changes, use DocumentFragment for efficient DOM manipulation, and employ lazy loading for non-critical data. Cache extracted data with invalidation strategies based on DOM mutations.
+
+6. **Error Handling**: Add robust error handling for malformed DOM structures, missing elements, and parsing failures. Implement graceful degradation when neither API nor DOM extraction can provide complete data.
+
+# Test Strategy:
+Comprehensive testing approach: 1) Test DOM extraction accuracy by comparing extracted data with actual event details from popovers across different calendar views (month, week, day), 2) Verify fallback activation by simulating API failures and confirming automatic switch to DOM extraction, 3) Performance testing to ensure DOM extraction is significantly faster than popover-based methods, measuring extraction time for 50+ events, 4) Test selective popover usage by verifying popovers only open when critical data is missing and cannot be extracted from visible elements, 5) Cross-browser compatibility testing to ensure DOM selectors work across different Chrome versions, 6) Test data accuracy under various calendar configurations (multiple calendars, different time zones, all-day events), 7) Stress test with calendar pages containing 100+ events to verify performance remains acceptable, 8) Test error recovery when DOM structure changes or elements are missing.

@@ -1,9 +1,20 @@
 // @ts-nocheck
 import { defineManifest } from '@crxjs/vite-plugin'
 
+// Get OAuth2 client ID from environment variable
+const clientId = process.env.VITE_GOOGLE_CLIENT_ID
+
+if (!clientId) {
+  throw new Error(
+    'Missing VITE_GOOGLE_CLIENT_ID environment variable. ' +
+    'Please create a .env file in the project root with: ' +
+    'VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com'
+  )
+}
+
 const manifest = defineManifest({
   name: 'Google Calendar Tools',
-  description: 'Enhance Google Calendar with powerful productivity tools: duplicate events, copy entire days, batch operations, and quick duration adjustments.',
+  description: 'Enhance Google Calendar with powerful productivity tools.',
   version: '0.0.1',
   manifest_version: 3,
   icons: {
@@ -37,11 +48,15 @@ const manifest = defineManifest({
       matches: ['https://calendar.google.com/*'],
     },
   ],
-  permissions: ['storage', 'activeTab'],
+  permissions: ['storage', 'activeTab', 'identity'],
+  oauth2: {
+    client_id: clientId,
+    scopes: ['https://www.googleapis.com/auth/calendar'],
+  },
   chrome_url_overrides: {
     newtab: 'newtab.html',
   },
-  host_permissions: ['https://calendar.google.com/*'],
+  host_permissions: ['https://calendar.google.com/*', 'https://www.googleapis.com/*'],
 })
 
 export default manifest 

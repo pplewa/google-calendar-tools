@@ -1,0 +1,43 @@
+# Task ID: 6
+# Title: Implement Quick Modify Event Duration Controls
+# Status: pending
+# Dependencies: 2
+# Priority: medium
+# Description: Add quick-adjust buttons for event duration in the event detail pop-over.
+# Details:
+Inject a 'Quick Adjust' section into the event detail pop-over. Add buttons: +15m, +30m, +60m, and 'Fill Until Next'. Adjust event end time accordingly. Disable buttons if changes would cause overlaps. Save changes instantly. Use TypeScript for logic.
+
+# Test Strategy:
+Test that buttons appear, adjust event duration as expected, and are disabled when overlaps would occur.
+
+# Subtasks:
+## 1. Inject 'Quick Adjust' Section into UI [pending]
+### Dependencies: None
+### Description: Add a new 'Quick Adjust' section to the event interface, ensuring it integrates seamlessly with the existing UI layout.
+### Details:
+Determine the appropriate location within the UI for the 'Quick Adjust' section. Implement the necessary HTML/CSS/JS to render this section and ensure it is visible and accessible to users.
+
+## 2. Add Duration Adjustment Buttons [pending]
+### Dependencies: 6.1
+### Description: Implement buttons within the 'Quick Adjust' section that allow users to quickly modify the event duration (e.g., +15 min, -15 min).
+### Details:
+Design and add buttons for common duration adjustments. Ensure button actions trigger the appropriate time calculations and update the event duration in the UI.
+
+## 3. Adjust Event End Time Based on Button Actions [pending]
+### Dependencies: 6.2
+### Description: Update the event's end time dynamically when a duration button is pressed, reflecting the new duration immediately in the UI.
+### Details:
+Implement logic to recalculate and display the new end time whenever a duration button is used. Ensure time calculations handle edge cases (e.g., crossing midnight).
+
+## 4. Disable Buttons on Overlap Detection [pending]
+### Dependencies: 6.3
+### Description: Detect if the adjusted event time overlaps with other events and disable duration buttons that would cause an overlap.
+### Details:
+Implement real-time overlap detection logic. When a potential overlap is detected, disable or visually indicate which duration buttons are unavailable to prevent invalid adjustments.
+
+## 5. Instantly Save Changes to Event [pending]
+### Dependencies: 6.3, 6.4
+### Description: Ensure that any valid adjustment to the event duration or end time is saved immediately without requiring additional user actions.
+### Details:
+Implement instant save functionality that triggers whenever a valid change is made. Confirm that changes persist and are reflected in the event data source.
+

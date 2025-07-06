@@ -1,0 +1,23 @@
+# Task ID: 17
+# Title: Configure Google OAuth2 Credentials for Calendar API Integration
+# Status: pending
+# Dependencies: 1, 13
+# Priority: high
+# Description: Set up proper Google OAuth2 credentials to enable fast API-based Copy Day functionality by replacing placeholder client ID with real credentials from Google Cloud Console.
+# Details:
+Configure Google OAuth2 credentials to enable the fast API-based Copy Day functionality that is currently falling back to slow DOM scraping due to placeholder OAuth2 client ID in the manifest. Implementation steps:
+
+1. **Google Cloud Console Setup**: Create a new Google Cloud Console project or use existing one. Navigate to APIs & Services > Credentials section. Enable the Google Calendar API in the API Library (https://console.cloud.google.com/apis/library/calendar-json.googleapis.com).
+
+2. **OAuth2 Credentials Creation**: Create OAuth2 client ID credentials for Chrome Extension application type. Configure authorized JavaScript origins and redirect URIs. Set up OAuth consent screen with required scopes (https://www.googleapis.com/auth/calendar, https://www.googleapis.com/auth/calendar.events). Add test users if in testing mode.
+
+3. **Manifest Configuration**: Update manifest.json to replace placeholder OAuth2 client ID with the real client ID from Google Cloud Console. Ensure proper permissions are set for calendar.google.com and googleapis.com domains. Configure oauth2 section with correct client_id and scopes.
+
+4. **Authentication Flow Implementation**: Verify the existing OAuth2 authentication flow works with real credentials. Test token acquisition, refresh, and storage mechanisms. Ensure proper error handling for authentication failures and expired tokens.
+
+5. **API Integration Verification**: Confirm that the Google Calendar API integration (Task 13) now uses the fast API calls instead of falling back to DOM scraping. Verify batch operations work correctly with authenticated requests.
+
+6. **Security Considerations**: Implement proper credential storage and handling. Ensure client secrets are not exposed in the extension code. Configure appropriate OAuth scopes with minimal required permissions.
+
+# Test Strategy:
+Comprehensive testing approach: 1) Verify Google Cloud Console project setup by confirming Calendar API is enabled and OAuth2 credentials are properly configured with correct application type and authorized domains, 2) Test OAuth2 authentication flow by installing the extension and confirming successful Google account authentication without errors, 3) Validate API functionality by performing Copy Day operations and confirming they use fast API calls instead of DOM scraping fallback (monitor network requests to verify googleapis.com calls), 4) Test bulk operations with 100+ events to ensure API rate limits and batch processing work correctly with real credentials, 5) Verify token refresh mechanism by testing extension functionality after token expiration, 6) Test error handling by temporarily disabling API access and confirming graceful fallback behavior, 7) Validate OAuth consent screen displays correctly with proper app name, scopes, and privacy policy information.

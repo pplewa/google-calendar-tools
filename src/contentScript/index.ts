@@ -45,7 +45,7 @@ interface DayHeader {
 class GoogleCalendarTools implements CalendarExtension {
   public initialized = false;
   public observer: MutationObserver | null = null;
-  private readonly DEBUG = true;
+  private readonly DEBUG = false;
   private eventCards: Map<string, EventCard> = new Map();
   private dayHeaders: Map<string, DayHeader> = new Map();
   private health: ExtensionHealth = {
@@ -1490,56 +1490,117 @@ class GoogleCalendarTools implements CalendarExtension {
 
   private async handleCopyDay(sourceDate: Date): Promise<void> {
     try {
-      this.log(`Starting Copy Day workflow for: ${sourceDate.toDateString()}`);
+      console.log(`🚀 Starting Copy Day workflow for: ${sourceDate.toDateString()}`);
       
-      // Show target day selection modal
+      // Step 1: Show target date selection modal
       const targetDate = await this.showTargetDaySelectionModal(sourceDate);
-      
-      if (targetDate) {
-        this.log(`Target date selected: ${targetDate.toDateString()}`);
+      if (!targetDate) {
+        console.log('Copy Day workflow cancelled - no target date selected');
+        return;
+      }
+
+      console.log(`Target date selected: ${targetDate.toDateString()}`);
+
+      // Try API-based approach first, fallback to DOM scraping
+      let sourceEvents: EventDetails[];
+      let targetEvents: EventDetails[];
+      let useAPIApproach = false;
+
+      try {
+        // Test API availability by trying to get auth token
+        console.log('🔐 Testing API authentication...');
+        await this.sendMessageToBackground({ type: 'AUTH_TOKEN', interactive: false });
+        useAPIApproach = true;
+        console.log('✅ API available - using fast API-based approach');
         
-        // Collect all events from source day (Subtask 4.3)
-        const sourceEvents = await this.collectEventsFromDay(sourceDate);
-        this.log(`Collected ${sourceEvents.length} events from ${sourceDate.toDateString()}`);
+        // Use fast API collection
+        sourceEvents = await this.collectEventsFromDayAPI(sourceDate);
+        targetEvents = await this.collectEventsFromDayAPI(targetDate);
         
-        if (sourceEvents.length === 0) {
+      } catch (apiError) {
+        console.log('⚠️ API unavailable - falling back to DOM scraping approach');
+        console.error('API fallback triggered:', apiError);
+        
+        // If it's a timeout or auth error, try interactive auth once
+        const errorMessage = (apiError as Error).message || String(apiError);
+        if (errorMessage.includes('timeout') || errorMessage.includes('auth')) {
+          console.log('🔐 Attempting interactive authentication...');
+          this.showNotification('First-time setup: Please grant calendar permissions', 'info');
+          
+          try {
+            await this.sendMessageToBackground({ type: 'AUTH_TOKEN', interactive: true });
+            console.log('✅ Interactive auth successful - retrying API approach');
+            
+            // Retry with API approach
+            sourceEvents = await this.collectEventsFromDayAPI(sourceDate);
+            targetEvents = await this.collectEventsFromDayAPI(targetDate);
+            useAPIApproach = true;
+            
+          } catch (interactiveError) {
+            console.error('❌ Interactive auth also failed:', interactiveError);
+            // Fall back to DOM scraping
+            this.showNotification(
+              'Using slower fallback method. Check OAuth2 setup in Google Cloud Console',
+              'info'
+            );
+            sourceEvents = await this.collectEventsFromDay(sourceDate);
+            targetEvents = await this.collectEventsFromDay(targetDate);
+          }
+        } else {
+          // Show user a notification about the fallback
           this.showNotification(
-            `No events found on ${sourceDate.toDateString()} to copy`,
+            'Using slower fallback method. For fastest performance, complete OAuth2 setup in Google Cloud Console',
             'info'
           );
+          
+          // Fallback to DOM scraping
+          sourceEvents = await this.collectEventsFromDay(sourceDate);
+          targetEvents = await this.collectEventsFromDay(targetDate);
+        }
+      }
+
+      this.log(`Collected ${sourceEvents.length} events from ${sourceDate.toDateString()}`);
+      
+      if (sourceEvents.length === 0) {
+        this.showNotification(
+          `No events found on ${sourceDate.toDateString()} to copy`,
+          'info'
+        );
+        return;
+      }
+      
+      // Step 2: Handle overlaps and conflicts
+      const conflicts = this.detectEventConflicts(sourceEvents, targetEvents, targetDate);
+      this.log(`Found ${conflicts.length} potential conflicts on target day`);
+      
+      let eventsToProcess = sourceEvents;
+      if (conflicts.length > 0) {
+        const resolutionResults = await this.showConflictResolutionModal(conflicts, sourceDate, targetDate);
+        if (resolutionResults === null) {
+          this.log('Copy Day workflow cancelled due to conflicts');
           return;
         }
-        
-        // Handle overlaps (Subtask 4.4)
-        const targetEvents = await this.collectEventsFromDay(targetDate);
-        const conflicts = this.detectEventConflicts(sourceEvents, targetEvents, targetDate);
-        
-        this.log(`Found ${conflicts.length} potential conflicts on target day`);
-        
-        let eventsToProcess = sourceEvents;
-        if (conflicts.length > 0) {
-          const resolutionResults = await this.showConflictResolutionModal(conflicts, sourceDate, targetDate);
-          if (resolutionResults === null) {
-            this.log('Copy Day workflow cancelled due to conflicts');
-            return;
-          }
-          eventsToProcess = resolutionResults;
-        }
-        
-        // Copy events to target day (Subtask 4.5)
-        if (eventsToProcess.length > 0) {
-          const copyResults = await this.copyEventsToTargetDay(eventsToProcess, targetDate, conflicts);
-          
-          // Show confirmation modal (Subtask 4.6)
-          await this.showCopyResultsModal(copyResults, sourceDate, targetDate, eventsToProcess, conflicts);
+        eventsToProcess = resolutionResults;
+      }
+      
+      // Step 3: Copy events to target date using appropriate method
+      if (eventsToProcess.length > 0) {
+        let copyResults;
+        if (useAPIApproach) {
+          this.log('🚀 Using fast API-based bulk copying');
+          copyResults = await this.copyEventsToTargetDayAPI(eventsToProcess, targetDate, conflicts);
         } else {
-          this.showNotification(
-            'No events selected for copying after conflict resolution.',
-            'info'
-          );
+          this.log('⚠️ Using DOM-based copying (slower)');
+          copyResults = await this.copyEventsToTargetDay(eventsToProcess, targetDate, conflicts);
         }
+        
+        // Step 4: Show results
+        await this.showCopyResultsModal(copyResults, sourceDate, targetDate, eventsToProcess, conflicts);
       } else {
-        this.log('Copy Day workflow cancelled by user');
+        this.showNotification(
+          'No events selected for copying after conflict resolution.',
+          'info'
+        );
       }
       
     } catch (error) {
@@ -1604,6 +1665,334 @@ class GoogleCalendarTools implements CalendarExtension {
       this.error('Error during event collection', error as Error);
       throw error;
     }
+  }
+
+  // ===== API-BASED METHODS FOR FAST BULK OPERATIONS =====
+
+  /**
+   * Send message to background script and await response
+   */
+  private async sendMessageToBackground(message: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      console.log('📤 Sending message to background:', message.type);
+      
+      // Add timeout to prevent hanging
+      const timeout = setTimeout(() => {
+        console.error('⏱️ Background message timeout after 10 seconds');
+        reject(new Error('Background script timeout'));
+      }, 10000);
+      
+      chrome.runtime.sendMessage(message, (response) => {
+        clearTimeout(timeout);
+        console.log('📥 Received response from background:', response);
+        
+        if (chrome.runtime.lastError) {
+          console.error('❌ Chrome runtime error:', chrome.runtime.lastError.message);
+          reject(new Error(chrome.runtime.lastError.message));
+        } else if (response?.success) {
+          console.log('✅ Background response success');
+          resolve(response.data);
+        } else {
+          console.error('❌ Background response error:', response?.error);
+          reject(new Error(response?.error || 'Unknown API error'));
+        }
+      });
+    });
+  }
+
+  /**
+   * Fast API-based event collection for a specific date
+   */
+  private async collectEventsFromDayAPI(sourceDate: Date): Promise<EventDetails[]> {
+    try {
+      this.log(`🚀 Starting fast API-based event collection for ${sourceDate.toDateString()}`);
+      
+      // Calculate date range for the specific day (start and end of day)
+      const startOfDay = new Date(sourceDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      
+      const endOfDay = new Date(sourceDate);
+      endOfDay.setHours(23, 59, 59, 999);
+      
+      const timeMin = startOfDay.toISOString();
+      const timeMax = endOfDay.toISOString();
+
+      // Get calendars to collect events from all user calendars
+      const calendars = await this.sendMessageToBackground({
+        type: 'GET_CALENDARS'
+      });
+
+      this.log(`Found ${calendars.length} calendars to search`);
+
+      // Collect events from all calendars for the specific date
+      const allEvents: EventDetails[] = [];
+      
+      for (const calendar of calendars) {
+        try {
+          const calendarEvents = await this.sendMessageToBackground({
+            type: 'GET_EVENTS',
+            calendarId: calendar.id,
+            timeMin,
+            timeMax
+          });
+
+          // Convert API response to EventDetails format
+          for (const apiEvent of calendarEvents) {
+            const eventDetails: EventDetails = {
+              id: apiEvent.id || `api-${Math.random().toString(36).substr(2, 9)}`,
+              title: apiEvent.summary || 'Untitled Event',
+              startDateTime: this.parseAPIDateTime(apiEvent.start),
+              endDateTime: this.parseAPIDateTime(apiEvent.end),
+              isAllDay: !!(apiEvent.start?.date), // All-day events use 'date' instead of 'dateTime'
+              location: apiEvent.location || '',
+              description: apiEvent.description || '',
+              calendarId: calendar.id
+            };
+
+            // Verify this event actually occurs on our target date
+            if (this.eventOccursOnDate(eventDetails, sourceDate)) {
+              allEvents.push(eventDetails);
+              this.log(`✅ API collected event: ${eventDetails.title} from calendar: ${calendar.summary || calendar.id}`);
+            }
+          }
+        } catch (calendarError) {
+          this.error(`Failed to get events from calendar ${calendar.id}`, calendarError as Error);
+          // Continue with other calendars
+        }
+      }
+
+      this.log(`🎯 API collection completed. Found ${allEvents.length} events for ${sourceDate.toDateString()}`);
+      return allEvents;
+
+    } catch (error) {
+      this.error('API-based event collection failed', error as Error);
+      throw error;
+    }
+  }
+
+  /**
+   * Parse API date/time objects to Date
+   */
+  private parseAPIDateTime(dateTimeObj: any): Date | null {
+    if (!dateTimeObj) return null;
+    
+    // Handle all-day events (date field)
+    if (dateTimeObj.date) {
+      return new Date(dateTimeObj.date);
+    }
+    
+    // Handle timed events (dateTime field)
+    if (dateTimeObj.dateTime) {
+      return new Date(dateTimeObj.dateTime);
+    }
+    
+    return null;
+  }
+
+  /**
+   * Fast API-based bulk event copying
+   */
+  private async copyEventsToTargetDayAPI(
+    eventsToProcess: EventDetails[], 
+    targetDate: Date, 
+    conflicts: Array<{sourceEvent: EventDetails, conflictingEvents: EventDetails[]}>
+  ): Promise<{successful: EventDetails[], failed: Array<{event: EventDetails, error: string}>}> {
+    
+    const results = {
+      successful: [] as EventDetails[],
+      failed: [] as Array<{event: EventDetails, error: string}>
+    };
+
+    try {
+      this.log(`🚀 Starting fast API-based bulk copy of ${eventsToProcess.length} events to ${targetDate.toDateString()}`);
+
+      // Show progress notification
+      this.showNotification(
+        `Fast copying ${eventsToProcess.length} event(s) to ${targetDate.toDateString()}...`,
+        'info'
+      );
+
+      // Handle overwrite conflicts by deleting existing events first
+      const eventsToDelete: EventDetails[] = [];
+      for (const eventToProcess of eventsToProcess) {
+        const eventConflict = conflicts.find(c => c.sourceEvent.id === eventToProcess.id);
+        if (eventConflict && eventConflict.conflictingEvents.length > 0) {
+          eventsToDelete.push(...eventConflict.conflictingEvents);
+        }
+      }
+
+      // Delete conflicting events if any (TODO: implement API-based deletion)
+      if (eventsToDelete.length > 0) {
+        this.log(`⚠️ Would delete ${eventsToDelete.length} conflicting events (API deletion not implemented yet)`);
+        // For now, log the deletion - this will be implemented in future iterations
+      }
+
+      // Prepare events for bulk creation
+      const eventsToCreate = eventsToProcess.map(event => {
+        const adjustedEvent = this.adjustEventForNewDate(event, targetDate);
+        const calendarId = event.calendarId || 'primary';
+        this.log(`🗓️ Preparing event "${event.title}" for calendar: ${calendarId}`);
+        return {
+          event: this.convertToAPIEventFormat(adjustedEvent),
+          calendarId: calendarId
+        };
+      });
+
+      // Use bulk API to create all events - group by calendar first since Google API 
+      // doesn't allow operations on different calendars in the same batch request
+      if (eventsToCreate.length > 0) {
+        const BATCH_SIZE = 1000; // Google Calendar API batch limit
+        
+        // Group events by calendar ID first
+        const eventsByCalendar = new Map<string, Array<{event: any, calendarId: string, originalIndex: number}>>();
+        
+        eventsToCreate.forEach((eventToCreate, index) => {
+          const calendarId = eventToCreate.calendarId;
+          if (!eventsByCalendar.has(calendarId)) {
+            eventsByCalendar.set(calendarId, []);
+          }
+          eventsByCalendar.get(calendarId)!.push({
+            ...eventToCreate,
+            originalIndex: index
+          });
+        });
+        
+        this.log(`🗓️ Events grouped into ${eventsByCalendar.size} calendar(s): ${Array.from(eventsByCalendar.keys()).join(', ')}`);
+        
+        // Process each calendar separately
+        for (const [calendarId, calendarEvents] of eventsByCalendar) {
+          this.log(`📅 Processing ${calendarEvents.length} events for calendar: ${calendarId}`);
+          
+          // Split calendar events into batches if needed
+          const calendarBatches: Array<Array<{event: any, calendarId: string, originalIndex: number}>> = [];
+          for (let i = 0; i < calendarEvents.length; i += BATCH_SIZE) {
+            calendarBatches.push(calendarEvents.slice(i, i + BATCH_SIZE));
+          }
+          
+          // Process each batch for this calendar
+          for (let batchIndex = 0; batchIndex < calendarBatches.length; batchIndex++) {
+            const batch = calendarBatches[batchIndex];
+            
+            try {
+              this.log(`🔄 Processing calendar "${calendarId}" batch ${batchIndex + 1}/${calendarBatches.length} with ${batch.length} events`);
+              
+              const createResults = await this.sendMessageToBackground({
+                type: 'BULK_CREATE_EVENTS',
+                events: batch
+              });
+
+              // Process results for this batch
+              for (let i = 0; i < batch.length; i++) {
+                const batchEvent = batch[i];
+                const originalEvent = eventsToProcess[batchEvent.originalIndex];
+                const createResult = createResults.data?.[i] || createResults[i]; // Handle both response formats
+                
+                if (createResult && !createResult.error) {
+                  results.successful.push(originalEvent);
+                  this.log(`✅ Successfully copied to ${calendarId}: ${originalEvent.title}`);
+                } else {
+                  const errorMessage = createResult?.error?.message || createResult?.error || 'Unknown API error';
+                  results.failed.push({ event: originalEvent, error: errorMessage });
+                  this.error(`❌ Failed to copy to ${calendarId}: ${originalEvent.title}`, new Error(errorMessage));
+                }
+              }
+              
+              // Small delay between batches to be respectful to the API
+              if (batchIndex < calendarBatches.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+              }
+              
+            } catch (batchError) {
+              // If this batch fails, add all events in the batch to failed
+              for (const batchEvent of batch) {
+                const originalEvent = eventsToProcess[batchEvent.originalIndex];
+                results.failed.push({ 
+                  event: originalEvent, 
+                  error: `Calendar ${calendarId} batch ${batchIndex + 1} failed: ${(batchError as Error).message}` 
+                });
+              }
+              this.error(`❌ Calendar ${calendarId} batch ${batchIndex + 1} failed`, batchError as Error);
+            }
+          }
+          
+          // Small delay between calendars
+          const calendarKeys = Array.from(eventsByCalendar.keys());
+          const currentCalendarIndex = calendarKeys.indexOf(calendarId);
+          if (currentCalendarIndex < calendarKeys.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        }
+      }
+
+      this.log(`🎯 Fast API copy completed. Success: ${results.successful.length}, Failed: ${results.failed.length}`);
+      
+      // Show success notification
+      if (results.successful.length > 0) {
+        this.showNotification(
+          `Successfully copied ${results.successful.length} event(s) in seconds!`,
+          'success'
+        );
+      }
+
+      return results;
+
+    } catch (error) {
+      this.error('API-based bulk copy failed', error as Error);
+      // Add all events to failed
+      for (const event of eventsToProcess) {
+        results.failed.push({ 
+          event, 
+          error: `API operation failed: ${(error as Error).message}` 
+        });
+      }
+      return results;
+    }
+  }
+
+  /**
+   * Convert EventDetails to Google Calendar API event format
+   */
+  private convertToAPIEventFormat(eventDetails: EventDetails): any {
+    const apiEvent: any = {
+      summary: eventDetails.title,
+      description: eventDetails.description,
+      location: eventDetails.location
+    };
+
+    // Handle start and end times
+    if (eventDetails.isAllDay) {
+      if (eventDetails.startDateTime) {
+        const startDate = new Date(eventDetails.startDateTime);
+        apiEvent.start = { date: this.formatDateOnly(startDate) };
+        
+        if (eventDetails.endDateTime) {
+          const endDate = new Date(eventDetails.endDateTime);
+          apiEvent.end = { date: this.formatDateOnly(endDate) };
+        } else {
+          // For single-day all-day events, end date is the next day
+          const endDate = new Date(startDate);
+          endDate.setDate(endDate.getDate() + 1);
+          apiEvent.end = { date: this.formatDateOnly(endDate) };
+        }
+      }
+    } else {
+      // Timed events
+      if (eventDetails.startDateTime) {
+        apiEvent.start = { 
+          dateTime: eventDetails.startDateTime.toISOString(),
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        };
+      }
+      
+      if (eventDetails.endDateTime) {
+        apiEvent.end = { 
+          dateTime: eventDetails.endDateTime.toISOString(),
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        };
+      }
+    }
+
+    return apiEvent;
   }
 
   private findEventsForDate(targetDate: Date): Array<{element: HTMLElement, eventId: string}> {
@@ -2419,7 +2808,10 @@ class GoogleCalendarTools implements CalendarExtension {
 
       const viewCalendar = () => {
         // Navigate to the target date in Google Calendar
-        const targetDateString = targetDate.toISOString().split('T')[0];
+        const year = targetDate.getFullYear();
+        const month = targetDate.getMonth() + 1; // JavaScript months are 0-indexed
+        const day = targetDate.getDate();
+        const targetDateString = `${year}/${month}/${day}`;
         window.location.href = `https://calendar.google.com/calendar/u/0/r/day/${targetDateString}`;
         closeModal();
       };
@@ -4135,7 +4527,7 @@ class GoogleCalendarTools implements CalendarExtension {
     const adjusted = { ...eventDetails };
     
     this.log('🔄 Adjusting event for new date:');
-    this.log('  📅 Target date (tomorrow):', targetDate.toISOString());
+    this.log('  📅 Target date:', targetDate.toISOString());
     this.log('  📋 Original event:', {
       title: eventDetails.title,
       startDateTime: eventDetails.startDateTime?.toISOString(),
@@ -4144,19 +4536,37 @@ class GoogleCalendarTools implements CalendarExtension {
     });
     
     if (eventDetails.isAllDay) {
-      // For all-day events, set to target date
+      // For all-day events, use target date (start of day) and calculate proper end date
       const startDate = new Date(targetDate);
       startDate.setHours(0, 0, 0, 0);
       
-      const endDate = new Date(targetDate);
-      endDate.setHours(23, 59, 59, 999);
+      // For Google Calendar API compatibility, all-day events need end date to be the next day
+      // But first check if this is a multi-day all-day event
+      let durationDays = 1; // Default to single day
+      if (eventDetails.startDateTime && eventDetails.endDateTime) {
+        const originalStart = new Date(eventDetails.startDateTime);
+        originalStart.setHours(0, 0, 0, 0); // Normalize to start of day
+        const originalEnd = new Date(eventDetails.endDateTime);
+        originalEnd.setHours(0, 0, 0, 0); // Normalize to start of day
+        
+        // Calculate duration in days for multi-day events
+        const diffTime = originalEnd.getTime() - originalStart.getTime();
+        durationDays = Math.max(1, Math.round(diffTime / (1000 * 60 * 60 * 24)));
+        
+        this.log(`  📏 Original all-day event duration: ${durationDays} days`);
+      }
+      
+      const endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + durationDays);
+      endDate.setHours(0, 0, 0, 0); // Keep end at start of next day for API compatibility
       
       adjusted.startDateTime = startDate;
       adjusted.endDateTime = endDate;
       
       this.log('  ⏰ All-day event adjusted:', {
         newStart: startDate.toISOString(),
-        newEnd: endDate.toISOString()
+        newEnd: endDate.toISOString(),
+        durationDays: durationDays
       });
     } else if (eventDetails.startDateTime && eventDetails.endDateTime) {
       // For timed events, preserve the time but change the date
