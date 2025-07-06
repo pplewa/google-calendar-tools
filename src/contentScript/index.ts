@@ -278,6 +278,8 @@ class GoogleCalendarTools implements CalendarExtension {
       
       // Try primary selector first, then fallbacks
       const selectors = [this.SELECTORS.dayHeader, ...this.SELECTORS.dayHeaderFallbacks];
+      this.log(`Trying selectors: ${selectors.join(', ')}`);
+      
       const dayHeaders = this.findElementsWithFallbacks(selectors);
       
       if (!dayHeaders) {
@@ -285,11 +287,26 @@ class GoogleCalendarTools implements CalendarExtension {
         return;
       }
       
+      this.log(`Found ${dayHeaders.length} potential day header elements`);
+      
+      // Debug each found element before filtering
+      Array.from(dayHeaders).forEach((header, index) => {
+        const text = header.textContent?.trim() || '';
+        const classes = header.className;
+        const role = header.getAttribute('role');
+        const hasEventId = header.hasAttribute('data-eventid');
+        const rect = header.getBoundingClientRect();
+        
+        this.log(`Element ${index}: classes="${classes}", role="${role}", hasEventId=${hasEventId}, text="${text}", position=${rect.left},${rect.top}, size=${rect.width}x${rect.height}`);
+      });
+      
       // Filter out elements that are actually event cards
-      const validDayHeaders = Array.from(dayHeaders).filter(header => 
-        !header.hasAttribute('data-eventid') && 
-        this.isValidDayHeader(header)
-      );
+      const validDayHeaders = Array.from(dayHeaders).filter((header, index) => {
+        const hasEventId = header.hasAttribute('data-eventid');
+        const isValid = this.isValidDayHeader(header);
+        this.log(`Element ${index}: hasEventId=${hasEventId}, isValid=${isValid}`);
+        return !hasEventId && isValid;
+      });
       
       if (validDayHeaders.length === 0) {
         this.log('No valid day headers found after filtering');
@@ -311,8 +328,8 @@ class GoogleCalendarTools implements CalendarExtension {
     // Check if element contains date text patterns
     const text = element.textContent?.trim() || '';
     
-    // Look for date patterns like "Mon, Jul 7", "Monday", numbers, etc.
-    const hasDateText = /\b(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d+)\b/i.test(text);
+    // Look for date patterns - updated to handle concatenated text like "Wed9", "Mon14"
+    const hasDateText = /(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\d*|\d+/i.test(text);
     
     // Check if it's positioned like a header (top area of calendar)
     const rect = element.getBoundingClientRect();
@@ -321,7 +338,13 @@ class GoogleCalendarTools implements CalendarExtension {
     // Not too small (avoid tiny elements)
     const hasReasonableSize = rect.width > 30 && rect.height > 20;
     
-    return hasDateText && isInHeaderArea && hasReasonableSize;
+    // Debug why validation fails
+    this.log(`Validating element: text="${text}", hasDateText=${hasDateText}, isInHeaderArea=${isInHeaderArea} (top=${rect.top}, windowHeight/2=${window.innerHeight / 2}), hasReasonableSize=${hasReasonableSize} (${rect.width}x${rect.height})`);
+    
+    const isValid = hasDateText && isInHeaderArea && hasReasonableSize;
+    this.log(`Element validation result: ${isValid}`);
+    
+    return isValid;
   }
 
   private enhanceDayHeader(headerElement: HTMLElement): void {
@@ -1586,6 +1609,8 @@ class GoogleCalendarTools implements CalendarExtension {
   private findEventsForDate(targetDate: Date): Array<{element: HTMLElement, eventId: string}> {
     const candidateEvents: Array<{element: HTMLElement, eventId: string}> = [];
     
+    this.log(`Finding events for target date: ${targetDate.toDateString()}`);
+    
     // Check all known event cards
     for (const [eventId, eventCard] of this.eventCards) {
       // Verify the element still exists in DOM
@@ -1602,14 +1627,11 @@ class GoogleCalendarTools implements CalendarExtension {
           element: eventCard.element,
           eventId: eventId
         });
-        this.log(`Event ${eventId} matches target date based on position`);
+        this.log(`✅ Event ${eventId} matches target date based on position: ${eventDate.toDateString()}`);
+      } else if (eventDate) {
+        this.log(`❌ Event ${eventId} is on different date: ${eventDate.toDateString()}, skipping`);
       } else {
-        // For events where position-based date extraction fails,
-        // include them as candidates and validate later using detailed extraction
-        candidateEvents.push({
-          element: eventCard.element,
-          eventId: eventId
-        });
+        this.log(`⚠️ Could not extract date for event ${eventId}, skipping for safety`);
       }
     }
     
@@ -1626,10 +1648,16 @@ class GoogleCalendarTools implements CalendarExtension {
             element: eventCard.element,
             eventId: eventId
           });
+          this.log(`✅ Newly discovered event ${eventId} matches target date: ${eventDate.toDateString()}`);
+        } else if (eventDate) {
+          this.log(`❌ Newly discovered event ${eventId} is on different date: ${eventDate.toDateString()}, skipping`);
+        } else {
+          this.log(`⚠️ Could not extract date for newly discovered event ${eventId}, skipping`);
         }
       }
     }
     
+    this.log(`Final candidates for ${targetDate.toDateString()}: ${candidateEvents.length} events`);
     return candidateEvents;
   }
 
