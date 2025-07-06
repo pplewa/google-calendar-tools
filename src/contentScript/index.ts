@@ -349,10 +349,6 @@ class GoogleCalendarTools implements CalendarExtension {
     style.id = styleId;
     style.textContent = `
       /* Google Calendar Tools Custom Styles */
-      .gct-enhanced-event {
-        position: relative;
-      }
-      
       .gct-duplicate-btn {
         position: absolute;
         top: 2px;
@@ -362,7 +358,7 @@ class GoogleCalendarTools implements CalendarExtension {
         cursor: pointer;
         opacity: 0;
         transition: opacity 0.2s ease;
-        z-index: 100;
+        z-index: 1000;
         border-radius: 3px;
         width: 18px;
         height: 18px;
@@ -372,10 +368,12 @@ class GoogleCalendarTools implements CalendarExtension {
         padding: 0;
         font-size: 10px;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        pointer-events: none;
       }
       
-      .gct-enhanced-event:hover .gct-duplicate-btn {
+      .gct-duplicate-btn.show {
         opacity: 1;
+        pointer-events: auto;
       }
       
       .gct-duplicate-btn:hover {
@@ -507,8 +505,14 @@ class GoogleCalendarTools implements CalendarExtension {
       // Simply append to the event card - much more reliable
       cardElement.appendChild(button);
       
-      // Add enhanced class for CSS targeting
-      cardElement.classList.add('gct-enhanced-event');
+      // Add hover listeners to show/hide button without affecting parent layout
+      cardElement.addEventListener('mouseenter', () => {
+        button.classList.add('show');
+      });
+      
+      cardElement.addEventListener('mouseleave', () => {
+        button.classList.remove('show');
+      });
 
       // Add event listener
       button.addEventListener('click', (e) => {
