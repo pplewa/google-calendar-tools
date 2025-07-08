@@ -38,7 +38,7 @@ interface EventDetails {
 class GoogleCalendarTools implements CalendarExtension {
   public initialized = false;
   public observer: MutationObserver | null = null;
-  private readonly DEBUG = true;
+  private readonly DEBUG = false;
   private eventCards: Map<string, EventCard> = new Map();
   private health: ExtensionHealth = {
     isHealthy: true,
