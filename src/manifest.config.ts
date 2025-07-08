@@ -56,7 +56,7 @@ const manifest = defineManifest({
   chrome_url_overrides: {
     newtab: 'newtab.html',
   },
-  host_permissions: ['https://calendar.google.com/*', 'https://www.googleapis.com/*'],
+  host_permissions: ['https://calendar.google.com/*', 'https://www.googleapis.com/*', 'https://plausible.io/*'],
 })
 
 export default manifest 
