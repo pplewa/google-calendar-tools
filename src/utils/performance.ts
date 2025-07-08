@@ -81,8 +81,8 @@ class PerformanceMonitor {
       unit: 'ms',
       timestamp: Date.now(),
       context: {
-        userAgent: navigator.userAgent,
-        url: window.location.href
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
+        url: typeof window !== 'undefined' ? window.location.href : 'background'
       }
     });
   }
@@ -91,7 +91,7 @@ class PerformanceMonitor {
    * Setup Long Task API to detect main thread blocking
    */
   private setupLongTaskDetection(): void {
-    if (!this.config.enableLongTaskDetection || !('PerformanceObserver' in window)) {
+    if (!this.config.enableLongTaskDetection || typeof window === 'undefined' || !('PerformanceObserver' in window)) {
       return;
     }
 
@@ -106,7 +106,7 @@ class PerformanceMonitor {
             timestamp: Date.now(),
             context: {
               startTime: longTask.startTime,
-              url: window.location.href
+              url: typeof window !== 'undefined' ? window.location.href : 'background'
             }
           });
         }
@@ -122,7 +122,7 @@ class PerformanceMonitor {
    * Setup observer for custom performance measures
    */
   private setupMeasureObserver(): void {
-    if (!('PerformanceObserver' in window)) {
+    if (typeof window === 'undefined' || !('PerformanceObserver' in window)) {
       return;
     }
 
@@ -137,7 +137,7 @@ class PerformanceMonitor {
               timestamp: Date.now(),
               context: {
                 startTime: entry.startTime,
-                url: window.location.href
+                url: typeof window !== 'undefined' ? window.location.href : 'background'
               }
             });
           }
@@ -211,7 +211,7 @@ class PerformanceMonitor {
         timestamp: Date.now(),
         context: {
           ...context,
-          url: window.location.href
+          url: typeof window !== 'undefined' ? window.location.href : 'background'
         }
       });
       
@@ -226,7 +226,7 @@ class PerformanceMonitor {
         context: {
           ...context,
           error: error instanceof Error ? error.message : String(error),
-          url: window.location.href
+          url: typeof window !== 'undefined' ? window.location.href : 'background'
         }
       });
       throw error;
@@ -248,7 +248,7 @@ class PerformanceMonitor {
       timestamp: Date.now(),
       context: {
         ...context,
-        url: window.location.href
+        url: typeof window !== 'undefined' ? window.location.href : 'background'
       }
     });
   }
@@ -269,7 +269,7 @@ class PerformanceMonitor {
       timestamp: Date.now(),
       context: {
         ...context,
-        url: window.location.href
+        url: typeof window !== 'undefined' ? window.location.href : 'background'
       }
     });
   }
@@ -285,7 +285,7 @@ class PerformanceMonitor {
       timestamp: Date.now(),
       context: {
         ...context,
-        url: window.location.href
+        url: typeof window !== 'undefined' ? window.location.href : 'background'
       }
     });
   }
@@ -356,7 +356,7 @@ class PerformanceMonitor {
               maxValue: Math.round(maxValue * 100) / 100,
               minValue: Math.round(minValue * 100) / 100,
               unit: metrics[0].unit,
-              url: window.location.href
+              url: typeof window !== 'undefined' ? window.location.href : 'background'
             }
           });
         }

@@ -182,7 +182,7 @@ interface ExportOptions {
 
 interface ModalState {
   isVisible: boolean;
-  currentModal: 'results_summary' | 'export_options' | 'error_details' | null;
+  currentModal: 'results_summary' | 'export_options' | 'error_details' | 'bulk_copy' | 'copy_day' | null;
   modalData: any;
   previousFocus: HTMLElement | null;
 }
@@ -198,7 +198,7 @@ interface CachedData {
 class GoogleCalendarTools implements CalendarExtension {
   public initialized = false;
   public observer: MutationObserver | null = null;
-  private readonly DEBUG = false;
+  private readonly DEBUG = true; // Enable debugging
   private eventCards: Map<string, EventCard> = new Map();
   private dayHeaders: Map<string, DayHeader> = new Map();
   private selectedEventIds: Set<string> = new Set();
@@ -851,7 +851,7 @@ class GoogleCalendarTools implements CalendarExtension {
   /**
    * Open a modal with the specified type and data
    */
-  private openModal(modalType: 'results_summary' | 'export_options' | 'error_details', data: any): void {
+  private openModal(modalType: 'results_summary' | 'export_options' | 'error_details' | 'bulk_copy' | 'copy_day', data: any): void {
     // Store previous focus for accessibility
     this.modalState.previousFocus = document.activeElement as HTMLElement;
     
@@ -1575,8 +1575,690 @@ class GoogleCalendarTools implements CalendarExtension {
   }
 
   private setupExtension(): void {
-    this.log('Setting up extension...');
-    // Basic setup implementation
+    this.log('Setting up Google Calendar Tools extension...');
+    
+    // Set up mutation observer to watch for calendar changes
+    this.observer = new MutationObserver((mutations) => {
+      let shouldEnhance = false;
+      
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+          shouldEnhance = true;
+          break;
+        }
+      }
+      
+      if (shouldEnhance) {
+        this.enhanceCalendarElements();
+      }
+    });
+
+    // Start observing the calendar container
+    const calendarContainer = document.querySelector('[role="main"]') || document.body;
+    this.observer.observe(calendarContainer, {
+      childList: true,
+      subtree: true
+    });
+
+    // Initial enhancement
+    this.enhanceCalendarElements();
+    
+    // Set up periodic health checks
+    setInterval(() => this.performHealthCheck(), 30000); // Every 30 seconds
+    
+    this.log('Google Calendar Tools extension setup complete');
+  }
+
+  /**
+   * Enhance calendar elements with our custom features
+   */
+  private enhanceCalendarElements(): void {
+    try {
+      this.enhanceEventCards();
+      this.enhanceDayHeaders();
+      this.addBulkOperationControls();
+      this.updateHealthMetrics();
+    } catch (error) {
+      this.error('Error enhancing calendar elements:', error as Error);
+      this.health.errorCount++;
+    }
+  }
+
+  /**
+   * Add duplicate buttons to event cards using correct Google Calendar selectors
+   */
+  private enhanceEventCards(): void {
+    // Updated selectors based on actual Google Calendar HTML structure analysis
+    const eventSelectors = [
+      // Regular timed events (most common)
+      '.GTG3wb.ChfiMc.rFUW1c[data-eventid][data-eventchip]',
+      
+      // All-day events
+      '.vEJ0bc.ChfiMc.rFUW1c[data-eventid][data-eventchip]',
+      
+      // Fallback: any element with both event attributes
+      '[data-eventid][data-eventchip]',
+      
+      // Legacy selectors for backward compatibility
+      'div[role="button"][data-eventid]',
+      'span.Tnsqdc',
+      'div.ShyPvd',
+      '.EiZ0dd',
+      '.NhBTpe',
+      '.kOTWwd'
+    ];
+
+    let totalFound = 0;
+    eventSelectors.forEach(selector => {
+      const events = document.querySelectorAll(selector);
+      if (events.length > 0) {
+        this.log(`Found ${events.length} events with selector: ${selector}`);
+        totalFound += events.length;
+        
+        events.forEach(eventEl => {
+          const element = eventEl as HTMLElement;
+          // Only enhance if it has event-like characteristics
+          if (this.isValidEventElement(element)) {
+            this.enhanceEventCard(element);
+          }
+        });
+      }
+    });
+    
+    this.log(`Total events found and enhanced: ${totalFound}`);
+    
+    // If no events found, log more detailed information for debugging
+    if (totalFound === 0) {
+      this.log('No events found. Checking for calendar grid...');
+      const calendarGrid = document.querySelector('[role="grid"]');
+      const weekView = document.querySelector('.BfTITd.FEiQrc.sMVRZe');
+      const eventContainers = document.querySelectorAll('[role="gridcell"].BiKU4b');
+      
+      this.log(`Calendar grid present: ${!!calendarGrid}`);
+      this.log(`Week view present: ${!!weekView}`);
+      this.log(`Event containers found: ${eventContainers.length}`);
+      
+      // Debug: look for any elements with data-eventid
+      const anyEventElements = document.querySelectorAll('[data-eventid]');
+      this.log(`Elements with data-eventid found: ${anyEventElements.length}`);
+      
+      if (anyEventElements.length > 0) {
+        this.log('First event element classes:', anyEventElements[0].className);
+        this.log('First event element attributes:', Array.from(anyEventElements[0].attributes).map(attr => `${attr.name}="${attr.value}"`).join(', '));
+      }
+    }
+  }
+
+  /**
+   * Validate if an element is actually a calendar event
+   */
+  private isValidEventElement(element: HTMLElement): boolean {
+    // Skip if already enhanced
+    if (element.dataset.gctEnhanced === 'true') {
+      return false;
+    }
+    
+    // Skip if it's part of the mini calendar (left sidebar)
+    const miniCalendar = element.closest('.g3VIld'); // Mini calendar container
+    if (miniCalendar) {
+      this.log('Skipping mini calendar element');
+      return false;
+    }
+    
+    // Skip if it's a day header or navigation element
+    if (element.matches('[role="columnheader"]') || 
+        element.matches('.yzWBv') ||
+        element.matches('[role="gridcell"]')) {
+      return false;
+    }
+    
+    // Must have some text content (event title)
+    const hasText = element.textContent && element.textContent.trim().length > 0;
+    
+    // Must be visible
+    const isVisible = element.offsetWidth > 0 && element.offsetHeight > 0;
+    
+    return hasText && isVisible;
+  }
+
+  /**
+   * Enhance individual event card with duplicate button and selection checkbox
+   */
+  private enhanceEventCard(eventElement: HTMLElement): void {
+    if (!eventElement || eventElement.dataset.gctEnhanced === 'true') {
+      return;
+    }
+
+    try {
+      const eventId = this.extractEventId(eventElement);
+      if (!eventId) return;
+
+      // Mark as enhanced to prevent duplicate processing
+      eventElement.dataset.gctEnhanced = 'true';
+
+      // Add selection checkbox for bulk operations
+      this.addSelectionCheckbox(eventElement, eventId);
+
+      // Add duplicate button
+      this.addDuplicateButton(eventElement, eventId);
+
+      // Track the event card
+      this.eventCards.set(eventId, {
+        element: eventElement,
+        eventId: eventId,
+        hasCustomUI: true,
+        lastSeen: Date.now()
+      });
+
+      this.health.totalEnhanced++;
+    } catch (error) {
+      this.error(`Failed to enhance event card: ${error}`, error as Error);
+      this.health.failedEnhancements++;
+    }
+  }
+
+  /**
+   * Extract event ID from various event element types
+   */
+  private extractEventId(eventElement: HTMLElement): string | null {
+    // Try different methods to get event ID
+    const eventId = eventElement.dataset.eventid || 
+                   eventElement.getAttribute('data-eventid') ||
+                   eventElement.getAttribute('jslog')?.match(/(?:^|;)ve:(\d+)/)?.[1] ||
+                   eventElement.querySelector('[data-eventid]')?.getAttribute('data-eventid');
+    
+    return eventId || `gct-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  /**
+   * Add selection checkbox for bulk operations
+   */
+  private addSelectionCheckbox(eventElement: HTMLElement, eventId: string): void {
+    if (eventElement.querySelector('.gct-selection-checkbox')) {
+      return; // Already has checkbox
+    }
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'gct-selection-checkbox';
+    checkbox.style.cssText = `
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      z-index: 10;
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    `;
+
+    checkbox.addEventListener('change', (e) => {
+      const isChecked = (e.target as HTMLInputElement).checked;
+      if (isChecked) {
+        this.selectedEventIds.add(eventId);
+        eventElement.style.outline = '2px solid #4285f4';
+      } else {
+        this.selectedEventIds.delete(eventId);
+        eventElement.style.outline = '';
+      }
+      this.updateBulkOperationControls();
+    });
+
+    // Show checkbox on hover
+    eventElement.addEventListener('mouseenter', () => {
+      checkbox.style.opacity = '1';
+    });
+    
+    eventElement.addEventListener('mouseleave', () => {
+      if (!checkbox.checked) {
+        checkbox.style.opacity = '0';
+      }
+    });
+
+    // Position the event element relative if not already
+    if (getComputedStyle(eventElement).position === 'static') {
+      eventElement.style.position = 'relative';
+    }
+
+    eventElement.appendChild(checkbox);
+  }
+
+  /**
+   * Add duplicate button to event card
+   */
+  private addDuplicateButton(eventElement: HTMLElement, eventId: string): void {
+    if (eventElement.querySelector('.gct-duplicate-btn')) {
+      return; // Already has button
+    }
+
+    const duplicateBtn = document.createElement('button');
+    duplicateBtn.className = 'gct-duplicate-btn';
+    duplicateBtn.innerHTML = '📋'; // Copy icon
+    duplicateBtn.title = 'Duplicate event to tomorrow';
+    duplicateBtn.style.cssText = `
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 20px;
+      height: 20px;
+      border: none;
+      background: rgba(255, 255, 255, 0.9);
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.2s ease, transform 0.1s ease;
+      z-index: 10;
+    `;
+
+    duplicateBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      this.duplicateEvent(eventId);
+    });
+
+    duplicateBtn.addEventListener('mouseenter', () => {
+      duplicateBtn.style.transform = 'scale(1.1)';
+    });
+
+    duplicateBtn.addEventListener('mouseleave', () => {
+      duplicateBtn.style.transform = 'scale(1)';
+    });
+
+    // Show button on hover
+    eventElement.addEventListener('mouseenter', () => {
+      duplicateBtn.style.opacity = '1';
+    });
+    
+    eventElement.addEventListener('mouseleave', () => {
+      duplicateBtn.style.opacity = '0';
+    });
+
+    eventElement.appendChild(duplicateBtn);
+  }
+
+  /**
+   * Enhance day headers with copy day functionality
+   */
+  private enhanceDayHeaders(): void {
+    // Updated selectors based on actual Google Calendar HTML structure analysis
+    const dayHeaderSelectors = [
+      // Date buttons within column headers (primary from HTML dump analysis)
+      'button.nUt0vb.sVASAd.nSCxEf.RKLVef[data-datekey]',
+      
+      // Column headers containing date buttons
+      '.yzWBv.ChfiMc[role="columnheader"]',
+      
+      // Legacy selectors for backward compatibility
+      '[data-date]',
+      '.nKXS0e', // Week view day headers
+      '.zG7Lyf', // Month view day headers
+      '.mv9CG'   // Day view header
+    ];
+
+    let totalFound = 0;
+    dayHeaderSelectors.forEach(selector => {
+      const headers = document.querySelectorAll(selector);
+      if (headers.length > 0) {
+        this.log(`Found ${headers.length} day headers with selector: ${selector}`);
+        totalFound += headers.length;
+        headers.forEach(headerEl => {
+          const element = headerEl as HTMLElement;
+          this.enhanceDayHeader(element);
+        });
+      }
+    });
+    
+    this.log(`Total day headers found and enhanced: ${totalFound}`);
+    
+    // If no headers found, log debugging information
+    if (totalFound === 0) {
+      this.log('No day headers found. Checking for calendar structure...');
+      const columnHeaders = document.querySelectorAll('[role="columnheader"]');
+      const dateButtons = document.querySelectorAll('[data-datekey]');
+      
+      this.log(`Column headers found: ${columnHeaders.length}`);
+      this.log(`Elements with data-datekey found: ${dateButtons.length}`);
+      
+      if (dateButtons.length > 0) {
+        this.log('First date button classes:', dateButtons[0].className);
+        this.log('First date button attributes:', Array.from(dateButtons[0].attributes).map(attr => `${attr.name}="${attr.value}"`).join(', '));
+      }
+    }
+  }
+
+  /**
+   * Enhance individual day header with copy day button
+   */
+  private enhanceDayHeader(headerElement: HTMLElement): void {
+    if (!headerElement || headerElement.dataset.gctEnhanced === 'true') {
+      return;
+    }
+
+    try {
+      const date = this.extractDate(headerElement);
+      if (!date) return;
+
+      headerElement.dataset.gctEnhanced = 'true';
+
+      // Add copy day button
+      this.addCopyDayButton(headerElement, date);
+
+      // Track the day header
+      const dateKey = date.toISOString().split('T')[0];
+      this.dayHeaders.set(dateKey, {
+        element: headerElement,
+        date: date,
+        hasCopyIcon: true,
+        lastSeen: Date.now()
+      });
+    } catch (error) {
+      this.error(`Failed to enhance day header: ${error}`, error as Error);
+    }
+  }
+
+  /**
+   * Extract date from day header element or date button
+   */
+  private extractDate(headerElement: HTMLElement): Date | null {
+    // Try different date extraction methods based on HTML dump analysis
+    const dateKey = headerElement.getAttribute('data-datekey');
+    const dateStr = headerElement.dataset.date ||
+                   headerElement.getAttribute('data-date') ||
+                   headerElement.textContent?.match(/\d{1,2}/)?.[0];
+    
+    // First try to extract from data-datekey (Google Calendar's internal format)
+    if (dateKey) {
+      try {
+        // datekey appears to be a number representing days from epoch
+        // Convert to actual date
+        const daysSinceEpoch = parseInt(dateKey);
+        if (!isNaN(daysSinceEpoch)) {
+          // Google Calendar's epoch appears to be around 1900-01-01
+          // This is an approximation - may need adjustment
+          const baseDate = new Date(1900, 0, 1);
+          const targetDate = new Date(baseDate.getTime() + (daysSinceEpoch * 24 * 60 * 60 * 1000));
+          this.log(`Extracted date from datekey ${dateKey}: ${targetDate.toDateString()}`);
+          return targetDate;
+        }
+      } catch (error) {
+        this.log(`Failed to parse datekey: ${dateKey}`);
+      }
+    }
+    
+    // Fallback to existing methods
+    if (dateStr) {
+      try {
+        // Try to parse the date string
+        if (dateStr.includes('-')) {
+          return new Date(dateStr);
+        } else {
+          // For day numbers, use current month/year
+          const today = new Date();
+          return new Date(today.getFullYear(), today.getMonth(), parseInt(dateStr));
+        }
+      } catch (error) {
+        this.log(`Failed to parse date: ${dateStr}`);
+      }
+    }
+    
+    // Final fallback: try to extract from aria-label or title
+    const ariaLabel = headerElement.getAttribute('aria-label');
+    if (ariaLabel) {
+      try {
+        // Look for date patterns in aria-label
+        const dateMatch = ariaLabel.match(/(\w+),\s*(\d{1,2})\s+(\w+)/);
+        if (dateMatch) {
+          const [, , day, month] = dateMatch;
+          const today = new Date();
+          const monthIndex = new Date(`${month} 1, ${today.getFullYear()}`).getMonth();
+          return new Date(today.getFullYear(), monthIndex, parseInt(day));
+        }
+      } catch (error) {
+        this.log(`Failed to parse aria-label date: ${ariaLabel}`);
+      }
+    }
+    
+    return null;
+  }
+
+  /**
+   * Add copy day button to day header
+   */
+  private addCopyDayButton(headerElement: HTMLElement, date: Date): void {
+    if (headerElement.querySelector('.gct-copy-day-btn')) {
+      return; // Already has button
+    }
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'gct-copy-day-btn';
+    copyBtn.innerHTML = '📅'; // Calendar icon
+    copyBtn.title = 'Copy entire day to another date';
+    copyBtn.style.cssText = `
+      margin-left: 8px;
+      width: 20px;
+      height: 20px;
+      border: none;
+      background: rgba(66, 133, 244, 0.1);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.2s ease;
+    `;
+
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      this.showCopyDayModal(date);
+    });
+
+    copyBtn.addEventListener('mouseenter', () => {
+      copyBtn.style.backgroundColor = 'rgba(66, 133, 244, 0.2)';
+    });
+
+    copyBtn.addEventListener('mouseleave', () => {
+      copyBtn.style.backgroundColor = 'rgba(66, 133, 244, 0.1)';
+    });
+
+    headerElement.appendChild(copyBtn);
+  }
+
+  /**
+   * Add bulk operation controls to the calendar interface
+   */
+  private addBulkOperationControls(): void {
+    const existingControls = document.querySelector('.gct-bulk-controls');
+    if (existingControls) {
+      this.updateBulkOperationControls();
+      return;
+    }
+
+    const controlsContainer = document.createElement('div');
+    controlsContainer.className = 'gct-bulk-controls';
+    controlsContainer.style.cssText = `
+      position: fixed;
+      top: 80px;
+      right: 20px;
+      background: white;
+      padding: 12px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 9999;
+      display: none;
+      font-family: 'Google Sans', Roboto, arial, sans-serif;
+      font-size: 14px;
+      min-width: 200px;
+    `;
+
+    controlsContainer.innerHTML = `
+      <div style="font-weight: 500; margin-bottom: 8px;">Bulk Operations</div>
+      <div class="gct-selected-count" style="font-size: 12px; color: #666; margin-bottom: 8px;">
+        0 events selected
+      </div>
+      <button class="gct-copy-selected-btn" style="
+        width: 100%;
+        padding: 8px;
+        background: #4285f4;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-bottom: 4px;
+      ">Copy Selected To...</button>
+      <button class="gct-clear-selection-btn" style="
+        width: 100%;
+        padding: 8px;
+        background: #f8f9fa;
+        color: #666;
+        border: 1px solid #dadce0;
+        border-radius: 4px;
+        cursor: pointer;
+      ">Clear Selection</button>
+    `;
+
+    // Add event listeners
+    const copyBtn = controlsContainer.querySelector('.gct-copy-selected-btn') as HTMLButtonElement;
+    const clearBtn = controlsContainer.querySelector('.gct-clear-selection-btn') as HTMLButtonElement;
+
+    copyBtn?.addEventListener('click', () => this.showBulkCopyModal());
+    clearBtn?.addEventListener('click', () => this.clearSelection());
+
+    document.body.appendChild(controlsContainer);
+  }
+
+  /**
+   * Update bulk operation controls visibility and state
+   */
+  private updateBulkOperationControls(): void {
+    const controls = document.querySelector('.gct-bulk-controls') as HTMLElement;
+    const countDisplay = controls?.querySelector('.gct-selected-count') as HTMLElement;
+
+    if (!controls || !countDisplay) return;
+
+    const selectedCount = this.selectedEventIds.size;
+    
+    if (selectedCount > 0) {
+      controls.style.display = 'block';
+      countDisplay.textContent = `${selectedCount} event${selectedCount === 1 ? '' : 's'} selected`;
+    } else {
+      controls.style.display = 'none';
+    }
+  }
+
+  /**
+   * Clear all selected events
+   */
+  private clearSelection(): void {
+    this.selectedEventIds.clear();
+    
+    // Remove visual selection indicators
+    document.querySelectorAll('.gct-selection-checkbox').forEach(checkbox => {
+      (checkbox as HTMLInputElement).checked = false;
+    });
+    
+    document.querySelectorAll('[data-gct-enhanced]').forEach(eventEl => {
+      (eventEl as HTMLElement).style.outline = '';
+    });
+
+    this.updateBulkOperationControls();
+  }
+
+  /**
+   * Show modal for copying selected events
+   */
+  private showBulkCopyModal(): void {
+    this.openModal('bulk_copy', {
+      selectedEvents: Array.from(this.selectedEventIds),
+      operation: 'BULK_COPY'
+    });
+  }
+
+  /**
+   * Show modal for copying entire day
+   */
+  private showCopyDayModal(sourceDate: Date): void {
+    this.openModal('copy_day', {
+      sourceDate: sourceDate,
+      operation: 'COPY_DAY'
+    });
+  }
+
+  /**
+   * Duplicate a single event to tomorrow
+   */
+  private async duplicateEvent(eventId: string): Promise<void> {
+    try {
+      this.log(`Duplicating event: ${eventId}`);
+      
+      // Show progress notification
+      this.showNotification('Duplicating event...', 'info');
+
+      // Send message to background script to handle the duplication
+      const response = await chrome.runtime.sendMessage({
+        type: 'DUPLICATE_EVENT',
+        eventId: eventId,
+        targetDate: new Date(Date.now() + 24 * 60 * 60 * 1000) // Tomorrow
+      });
+
+      if (response.success) {
+        this.showNotification('Event duplicated successfully!', 'success');
+      } else {
+        this.showNotification('Failed to duplicate event', 'error');
+      }
+    } catch (error) {
+      this.error('Failed to duplicate event:', error as Error);
+      this.showNotification('Error duplicating event', 'error');
+    }
+  }
+
+  /**
+   * Perform health check on enhanced elements
+   */
+  private performHealthCheck(): void {
+    const now = Date.now();
+    let healthyCount = 0;
+    let staleCount = 0;
+
+    // Check event cards
+    this.eventCards.forEach((eventCard, eventId) => {
+      if (document.contains(eventCard.element)) {
+        eventCard.lastSeen = now;
+        healthyCount++;
+      } else {
+        staleCount++;
+        this.eventCards.delete(eventId);
+      }
+    });
+
+    // Check day headers
+    this.dayHeaders.forEach((dayHeader, dateKey) => {
+      if (document.contains(dayHeader.element)) {
+        dayHeader.lastSeen = now;
+      } else {
+        this.dayHeaders.delete(dateKey);
+      }
+    });
+
+    this.health.isHealthy = staleCount < healthyCount * 0.1; // Healthy if less than 10% stale
+    this.health.lastHealthCheck = now;
+
+    if (staleCount > 0) {
+      this.log(`Health check: Cleaned up ${staleCount} stale elements`);
+    }
+  }
+
+  /**
+   * Update health metrics
+   */
+  private updateHealthMetrics(): void {
+    this.health.lastHealthCheck = Date.now();
   }
 
   public cleanup(): void {
